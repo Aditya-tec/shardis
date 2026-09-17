@@ -6,6 +6,7 @@ const ENV_KEYS = [
   "ROLE",
   "SHARD_ID",
   "CLUSTER_CONFIG_PATH",
+  "DATA_DIR",
   "PORT",
   "MAXMEMORY_MB",
   "PUBLIC_DEMO",
@@ -34,6 +35,12 @@ describe("loadConfig", () => {
     expect(config.shardId).toBe("shard-a");
     expect(config.port).toBe(7000);
     expect(config.publicDemo).toBe(false);
+    expect(config.dataDir).toBe("./data/node-a1");
+  });
+
+  it("derives the default dataDir from a custom NODE_ID", () => {
+    process.env.NODE_ID = "node-c3";
+    expect(loadConfig().dataDir).toBe("./data/node-c3");
   });
 
   it("reads values from environment variables", () => {

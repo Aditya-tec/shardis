@@ -1,8 +1,19 @@
+import { mkdtempSync, rmSync } from "node:fs";
 import { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { createApp, type App } from "../src/app.js";
 import type { NodeConfig } from "../src/config.js";
+
+const dataDirs: string[] = [];
+
+function tempDataDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "shardis-app-test-"));
+  dataDirs.push(dir);
+  return dir;
+}
 
 function testConfig(overrides: Partial<NodeConfig> = {}): NodeConfig {
   return {
@@ -10,6 +21,7 @@ function testConfig(overrides: Partial<NodeConfig> = {}): NodeConfig {
     role: "leader",
     shardId: "shard-a",
     clusterConfigPath: "./cluster.config.local.json",
+    dataDir: tempDataDir(),
     port: 0,
     maxmemoryMb: 64,
     ttlSweepIntervalMs: 1000,
@@ -60,7 +72,11 @@ describe("app WS protocol", () => {
   afterEach(async () => {
     socket.close();
     app.wss.close();
+    app.close();
     await new Promise<void>((resolve) => app.server.close(() => resolve()));
+    while (dataDirs.length) {
+      rmSync(dataDirs.pop()!, { recursive: true, force: true });
+    }
   });
 
   it("round-trips SET then GET over the wire", async () => {
@@ -91,6 +107,7 @@ describe("app WS protocol", () => {
 
     smallSocket.close();
     smallApp.wss.close();
+    smallApp.close();
     await new Promise<void>((resolve) => smallApp.server.close(() => resolve()));
   });
 

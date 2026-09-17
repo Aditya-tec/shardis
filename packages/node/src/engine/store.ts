@@ -21,6 +21,18 @@ export class Store {
     this.data.set(key, { value, expiresAt });
   }
 
+  // Writes an entry with an already-resolved absolute expiry instead of a
+  // ttl relative to now(). Used by AOF/snapshot replay so a key's remaining
+  // lifetime survives a restart instead of restarting its ttl countdown.
+  restoreSet(key: string, value: string, expiresAt: number | null): void {
+    this.data.set(key, { value, expiresAt });
+  }
+
+  restoreExpire(key: string, expiresAt: number): void {
+    const entry = this.data.get(key);
+    if (entry) entry.expiresAt = expiresAt;
+  }
+
   get(key: string): string | undefined {
     const entry = this.data.get(key);
     if (!entry) return undefined;

@@ -1,7 +1,11 @@
 import { createServer, type Server } from "node:http";
+import { join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { NodeConfig } from "./config.js";
 import { Store } from "./engine/store.js";
+import { AofLog } from "./persistence/aof.js";
+import { applyAofEntries } from "./persistence/replay.js";
+import { entryForRequest } from "./persistence/writer.js";
 import { dispatch } from "./protocol/dispatch.js";
 import { parseRequest } from "./protocol/parse.js";
 import type { ErrResponse } from "./protocol/types.js";
@@ -10,7 +14,9 @@ export interface App {
   server: Server;
   wss: WebSocketServer;
   store: Store;
+  aofLog: AofLog;
   log: (event: string, fields?: Record<string, unknown>) => void;
+  close: () => void;
 }
 
 function makeLogger(nodeId: string) {
@@ -24,6 +30,14 @@ function makeLogger(nodeId: string) {
 export function createApp(config: NodeConfig, startedAt = Date.now()): App {
   const store = new Store();
   const log = makeLogger(config.nodeId);
+
+  const aofLog = new AofLog(join(config.dataDir, "aof.log"));
+  aofLog.open();
+  const replayed = aofLog.replay();
+  applyAofEntries(store, replayed);
+  if (replayed.length > 0) {
+    log("aof_replayed", { entries: replayed.length, keys: store.size });
+  }
 
   const server = createServer((req, res) => {
     if (req.method === "GET" && req.url === "/healthz") {
@@ -68,6 +82,13 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
           return;
         }
 
+        const aofEntry = entryForRequest(result.request, Date.now);
+        if (aofEntry) {
+          // Durably persisted before the write is applied or acked, so a
+          // crash between here and the ack can never lose it on replay.
+          aofLog.append(aofEntry);
+        }
+
         const response = dispatch(result.request, store);
         if (result.request.op !== "GET") {
           log("write_applied", { op: result.request.op, key: result.request.key });
@@ -84,5 +105,12 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
     });
   });
 
-  return { server, wss, store, log };
+  return {
+    server,
+    wss,
+    store,
+    aofLog,
+    log,
+    close: () => aofLog.close()
+  };
 }

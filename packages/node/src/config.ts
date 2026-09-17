@@ -3,6 +3,7 @@ export interface NodeConfig {
   role: "leader" | "follower";
   shardId: string;
   clusterConfigPath: string;
+  dataDir: string;
   port: number;
   maxmemoryMb: number;
   ttlSweepIntervalMs: number;
@@ -40,11 +41,14 @@ export function loadConfig(): NodeConfig {
     throw new Error(`ROLE must be "leader" or "follower", got: ${role}`);
   }
 
+  const nodeId = requireEnv("NODE_ID", "node-a1");
+
   return {
-    nodeId: requireEnv("NODE_ID", "node-a1"),
+    nodeId,
     role,
     shardId: requireEnv("SHARD_ID", "shard-a"),
     clusterConfigPath: requireEnv("CLUSTER_CONFIG_PATH", "./cluster.config.local.json"),
+    dataDir: requireEnv("DATA_DIR", `./data/${nodeId}`),
     port: intEnv("PORT", 7000),
     maxmemoryMb: intEnv("MAXMEMORY_MB", 64),
     ttlSweepIntervalMs: intEnv("TTL_SWEEP_INTERVAL_MS", 1000),

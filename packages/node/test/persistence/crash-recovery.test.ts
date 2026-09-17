@@ -1,0 +1,117 @@
+import { type ChildProcess, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+import WebSocket from "ws";
+
+const packageRoot = fileURLToPath(new URL("../..", import.meta.url));
+
+function randomPort(): number {
+  return 21000 + Math.floor(Math.random() * 20000);
+}
+
+function spawnNode(port: number, dataDir: string): ChildProcess {
+  return spawn(process.execPath, ["--import", "tsx", "src/server.ts"], {
+    cwd: packageRoot,
+    env: {
+      ...process.env,
+      NODE_ID: "node-crash-test",
+      ROLE: "leader",
+      SHARD_ID: "shard-a",
+      PORT: String(port),
+      DATA_DIR: dataDir
+    },
+    stdio: "ignore"
+  });
+}
+
+async function connectWithRetry(url: string, attempts = 40): Promise<WebSocket> {
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      const socket = new WebSocket(url);
+      await new Promise<void>((resolve, reject) => {
+        socket.once("open", () => resolve());
+        socket.once("error", reject);
+      });
+      return socket;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+  }
+  throw new Error(`could not connect to ${url}: ${String(lastError)}`);
+}
+
+function send(socket: WebSocket, request: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return new Promise((resolve) => {
+    socket.once("message", (data) => resolve(JSON.parse(data.toString("utf8"))));
+    socket.send(JSON.stringify(request));
+  });
+}
+
+function waitForExit(child: ChildProcess): Promise<void> {
+  return new Promise((resolve) => child.once("exit", () => resolve()));
+}
+
+function checksumOf(values: Record<string, unknown>): string {
+  return createHash("sha256").update(JSON.stringify(values)).digest("hex");
+}
+
+describe("AOF crash recovery (hard kill + restart)", () => {
+  let child: ChildProcess | null = null;
+  let dataDir = "";
+
+  afterEach(async () => {
+    if (child) {
+      child.kill("SIGKILL");
+      await waitForExit(child);
+      child = null;
+    }
+    if (dataDir) rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("recovers a byte-identical state after SIGKILL and restart on the same data dir", async () => {
+    dataDir = mkdtempSync(join(tmpdir(), "shardis-crash-"));
+    const port = randomPort();
+
+    child = spawnNode(port, dataDir);
+    const socket = await connectWithRetry(`ws://127.0.0.1:${port}/ws`);
+
+    const keys = Array.from({ length: 25 }, (_, i) => `key-${i}`);
+    for (const key of keys) {
+      const response = await send(socket, { id: key, op: "SET", key, value: `value-for-${key}` });
+      expect(response.ok).toBe(true);
+    }
+    // One key with a long-lived ttl, to prove ttl survives the restart too.
+    await send(socket, { id: "ttl-set", op: "SET", key: "with-ttl", value: "v", ttl_ms: 5 * 60_000 });
+    keys.push("with-ttl");
+
+    const before: Record<string, unknown> = {};
+    for (const key of keys) {
+      before[key] = (await send(socket, { id: `get-${key}`, op: "GET", key })).value;
+    }
+    const beforeChecksum = checksumOf(before);
+
+    socket.close();
+    child.kill("SIGKILL");
+    await waitForExit(child);
+    child = null;
+
+    child = spawnNode(port, dataDir);
+    const socket2 = await connectWithRetry(`ws://127.0.0.1:${port}/ws`);
+
+    const after: Record<string, unknown> = {};
+    for (const key of keys) {
+      after[key] = (await send(socket2, { id: `get2-${key}`, op: "GET", key })).value;
+    }
+    const afterChecksum = checksumOf(after);
+    socket2.close();
+
+    expect(afterChecksum).toBe(beforeChecksum);
+    expect(after).toEqual(before);
+  }, 30000);
+});

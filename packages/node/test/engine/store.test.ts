@@ -141,4 +141,35 @@ describe("Store", () => {
     store.del("a");
     expect(Array.from(store.keys())).toEqual(["b"]);
   });
+
+  it("restoreSet writes an already-resolved absolute expiry, not a ttl relative to now()", () => {
+    const store = new Store();
+    const expiresAt = Date.now() + 1000;
+    store.restoreSet("foo", "bar", expiresAt);
+    expect(store.get("foo")).toBe("bar");
+
+    vi.advanceTimersByTime(1001);
+    expect(store.get("foo")).toBeUndefined();
+  });
+
+  it("restoreSet with expiresAt null never expires", () => {
+    const store = new Store();
+    store.restoreSet("foo", "bar", null);
+    vi.advanceTimersByTime(1000 * 60 * 60 * 24 * 365);
+    expect(store.get("foo")).toBe("bar");
+  });
+
+  it("restoreExpire updates the expiry of an existing key", () => {
+    const store = new Store();
+    store.set("foo", "bar");
+    store.restoreExpire("foo", Date.now() + 500);
+    vi.advanceTimersByTime(501);
+    expect(store.get("foo")).toBeUndefined();
+  });
+
+  it("restoreExpire on a missing key is a no-op, not an error", () => {
+    const store = new Store();
+    expect(() => store.restoreExpire("missing", Date.now() + 500)).not.toThrow();
+    expect(store.has("missing")).toBe(false);
+  });
 });
