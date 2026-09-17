@@ -1,0 +1,22 @@
+{
+  "shards": [
+    {
+      "id": "shard-a",
+      "hash_range": [0, 5460],
+      "leader": { "id": "node-a1", "url": "ws://node-a1:7000/ws" },
+      "followers": [{ "id": "node-a2", "url": "ws://node-a2:7000/ws" }]
+    },
+    {
+      "id": "shard-b",
+      "hash_range": [5461, 10922],
+      "leader": { "id": "node-b1", "url": "ws://node-b1:7000/ws" },
+      "followers": [{ "id": "node-b2", "url": "ws://node-b2:7000/ws" }]
+    },
+    {
+      "id": "shard-c",
+      "hash_range": [10923, 16383],
+      "leader": { "id": "node-c1", "url": "ws://node-c1:7000/ws" },
+      "followers": [{ "id": "node-c2", "url": "ws://node-c2:7000/ws" }]
+    }
+  ]
+}
