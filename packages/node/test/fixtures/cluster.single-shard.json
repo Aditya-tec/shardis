@@ -1,0 +1,10 @@
+{
+  "shards": [
+    {
+      "id": "shard-a",
+      "hash_range": [0, 16383],
+      "leader": { "id": "node-test", "url": "ws://leader-placeholder/ws" },
+      "followers": []
+    }
+  ]
+}

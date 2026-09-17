@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { NodeConfig } from "./config.js";
 import { Store } from "./engine/store.js";
+import { loadClusterConfig } from "./hashring/config.js";
+import { HashRing } from "./hashring/ring.js";
 import { AofLog } from "./persistence/aof.js";
 import { applyAofEntries } from "./persistence/replay.js";
 import { loadSnapshot, writeSnapshotAtomic } from "./persistence/snapshot.js";
@@ -19,6 +21,7 @@ export interface App {
   store: Store;
   aofLog: AofLog;
   pubsub: PubSubBroker;
+  ring: HashRing;
   log: (event: string, fields?: Record<string, unknown>) => void;
   snapshotNow: () => void;
   close: () => void;
@@ -36,6 +39,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
   const store = new Store({ maxmemoryBytes: config.maxmemoryMb * 1024 * 1024 });
   const pubsub = new PubSubBroker();
   const log = makeLogger(config.nodeId);
+  const ring = new HashRing(loadClusterConfig(config.clusterConfigPath));
 
   const snapshotPath = join(config.dataDir, "snapshot.json");
   const snapshot = loadSnapshot(snapshotPath);
@@ -113,6 +117,21 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
         }
 
         if (isStoreRequest(result.request)) {
+          const owningShard = ring.shardForKey(result.request.key);
+          if (owningShard.id !== config.shardId) {
+            log("moved_redirect", { key: result.request.key, shard: owningShard.id });
+            socket.send(
+              JSON.stringify({
+                id: result.request.id,
+                ok: false,
+                error: "MOVED",
+                shard: owningShard.id,
+                leader: owningShard.leader.url
+              })
+            );
+            return;
+          }
+
           const aofEntry = entryForRequest(result.request, Date.now);
           if (aofEntry) {
             // Durably persisted before the write is applied or acked, so a
@@ -150,6 +169,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
     store,
     aofLog,
     pubsub,
+    ring,
     log,
     snapshotNow,
     close: () => {

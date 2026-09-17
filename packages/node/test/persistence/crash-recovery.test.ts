@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 
 const packageRoot = fileURLToPath(new URL("../..", import.meta.url));
+const clusterConfigPath = fileURLToPath(new URL("../fixtures/cluster.single-shard.json", import.meta.url));
 
 function randomPort(): number {
   return 21000 + Math.floor(Math.random() * 20000);
@@ -23,6 +24,7 @@ function spawnNode(port: number, dataDir: string, envOverrides: Record<string, s
       SHARD_ID: "shard-a",
       PORT: String(port),
       DATA_DIR: dataDir,
+      CLUSTER_CONFIG_PATH: clusterConfigPath,
       ...envOverrides
     },
     stdio: "ignore"

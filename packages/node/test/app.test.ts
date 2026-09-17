@@ -1,11 +1,14 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { createApp, type App } from "../src/app.js";
 import type { NodeConfig } from "../src/config.js";
+
+const SINGLE_SHARD_FIXTURE = fileURLToPath(new URL("./fixtures/cluster.single-shard.json", import.meta.url));
 
 const dataDirs: string[] = [];
 
@@ -20,7 +23,7 @@ function testConfig(overrides: Partial<NodeConfig> = {}): NodeConfig {
     nodeId: "node-test",
     role: "leader",
     shardId: "shard-a",
-    clusterConfigPath: "./cluster.config.local.json",
+    clusterConfigPath: SINGLE_SHARD_FIXTURE,
     dataDir: tempDataDir(),
     port: 0,
     maxmemoryMb: 64,
