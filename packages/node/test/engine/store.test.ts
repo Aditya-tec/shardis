@@ -172,4 +172,15 @@ describe("Store", () => {
     expect(() => store.restoreExpire("missing", Date.now() + 500)).not.toThrow();
     expect(store.has("missing")).toBe(false);
   });
+
+  it("dump() exports only live entries, excluding expired ones, without mutating the store", () => {
+    const store = new Store();
+    store.set("live", "v1");
+    store.set("expiring", "v2", 1000);
+    vi.advanceTimersByTime(1001);
+
+    expect(store.dump()).toEqual([{ key: "live", value: "v1", expiresAt: null }]);
+    // Reading via dump() must not have swept the expired entry as a side effect.
+    expect(store.size).toBe(2);
+  });
 });

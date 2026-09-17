@@ -71,4 +71,21 @@ describe("AofLog", () => {
     const log = new AofLog(join(dir, "aof.log"));
     expect(() => log.append({ op: "DEL", key: "foo" })).toThrow(/not open/);
   });
+
+  it("truncate empties the file and appending afterward still works", () => {
+    const filePath = join(dir, "aof.log");
+    const log = new AofLog(filePath);
+    log.open();
+    log.append({ op: "SET", key: "a", value: "1", expiresAt: null });
+    log.append({ op: "SET", key: "b", value: "2", expiresAt: null });
+
+    log.truncate();
+    expect(readFileSync(filePath, "utf8")).toBe("");
+
+    log.append({ op: "SET", key: "c", value: "3", expiresAt: null });
+    log.close();
+
+    const reopened = new AofLog(filePath);
+    expect(reopened.replay()).toEqual([{ op: "SET", key: "c", value: "3", expiresAt: null }]);
+  });
 });

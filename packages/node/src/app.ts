@@ -5,6 +5,7 @@ import type { NodeConfig } from "./config.js";
 import { Store } from "./engine/store.js";
 import { AofLog } from "./persistence/aof.js";
 import { applyAofEntries } from "./persistence/replay.js";
+import { loadSnapshot, writeSnapshotAtomic } from "./persistence/snapshot.js";
 import { entryForRequest } from "./persistence/writer.js";
 import { dispatch } from "./protocol/dispatch.js";
 import { parseRequest } from "./protocol/parse.js";
@@ -16,6 +17,7 @@ export interface App {
   store: Store;
   aofLog: AofLog;
   log: (event: string, fields?: Record<string, unknown>) => void;
+  snapshotNow: () => void;
   close: () => void;
 }
 
@@ -31,13 +33,33 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
   const store = new Store();
   const log = makeLogger(config.nodeId);
 
+  const snapshotPath = join(config.dataDir, "snapshot.json");
+  const snapshot = loadSnapshot(snapshotPath);
+  if (snapshot) {
+    for (const entry of snapshot) store.restoreSet(entry.key, entry.value, entry.expiresAt);
+    log("snapshot_loaded", { entries: snapshot.length });
+  }
+
   const aofLog = new AofLog(join(config.dataDir, "aof.log"));
   aofLog.open();
+  // The AOF only ever holds writes since the last snapshot (it's truncated
+  // on every snapshot below), so replaying it on top of the loaded snapshot
+  // reconstructs exactly snapshot-state + tail, never double-applies.
   const replayed = aofLog.replay();
   applyAofEntries(store, replayed);
   if (replayed.length > 0) {
     log("aof_replayed", { entries: replayed.length, keys: store.size });
   }
+
+  function snapshotNow(): void {
+    const entries = store.dump();
+    writeSnapshotAtomic(snapshotPath, entries);
+    aofLog.truncate();
+    log("snapshot_taken", { keys: entries.length });
+  }
+
+  const snapshotTimer = setInterval(snapshotNow, config.snapshotIntervalMs);
+  snapshotTimer.unref?.();
 
   const server = createServer((req, res) => {
     if (req.method === "GET" && req.url === "/healthz") {
@@ -111,6 +133,10 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
     store,
     aofLog,
     log,
-    close: () => aofLog.close()
+    snapshotNow,
+    close: () => {
+      clearInterval(snapshotTimer);
+      aofLog.close();
+    }
   };
 }

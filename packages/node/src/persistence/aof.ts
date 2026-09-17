@@ -42,6 +42,18 @@ export class AofLog {
     return entries;
   }
 
+  // Resets the log to empty - called right after a snapshot captures full
+  // state, so the log going forward holds only the tail written since.
+  // A fd opened for append ("a+") can't be ftruncateSync'd on Windows
+  // (EPERM), so this closes it, truncates via a fresh "w" open, and
+  // reopens for append rather than truncating the existing fd in place.
+  truncate(): void {
+    if (this.fd === null) throw new Error("AOF is not open");
+    closeSync(this.fd);
+    closeSync(openSync(this.filePath, "w"));
+    this.fd = openSync(this.filePath, "a+");
+  }
+
   close(): void {
     if (this.fd !== null) {
       closeSync(this.fd);

@@ -78,6 +78,18 @@ export class Store {
     return this.data.keys();
   }
 
+  // A point-in-time export of every live (non-expired) entry, for
+  // snapshotting. Read-only: does not sweep or mutate expired entries.
+  dump(): Array<{ key: string; value: string; expiresAt: number | null }> {
+    const out: Array<{ key: string; value: string; expiresAt: number | null }> = [];
+    for (const [key, entry] of this.data) {
+      if (!this.isExpired(entry)) {
+        out.push({ key, value: entry.value, expiresAt: entry.expiresAt });
+      }
+    }
+    return out;
+  }
+
   private isExpired(entry: StoreEntry): boolean {
     return entry.expiresAt !== null && entry.expiresAt <= this.now();
   }

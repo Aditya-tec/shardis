@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,7 @@ function randomPort(): number {
   return 21000 + Math.floor(Math.random() * 20000);
 }
 
-function spawnNode(port: number, dataDir: string): ChildProcess {
+function spawnNode(port: number, dataDir: string, envOverrides: Record<string, string> = {}): ChildProcess {
   return spawn(process.execPath, ["--import", "tsx", "src/server.ts"], {
     cwd: packageRoot,
     env: {
@@ -22,10 +22,20 @@ function spawnNode(port: number, dataDir: string): ChildProcess {
       ROLE: "leader",
       SHARD_ID: "shard-a",
       PORT: String(port),
-      DATA_DIR: dataDir
+      DATA_DIR: dataDir,
+      ...envOverrides
     },
     stdio: "ignore"
   });
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs: number, description: string): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`timed out waiting for: ${description}`);
 }
 
 async function connectWithRetry(url: string, attempts = 40): Promise<WebSocket> {
@@ -113,5 +123,57 @@ describe("AOF crash recovery (hard kill + restart)", () => {
 
     expect(afterChecksum).toBe(beforeChecksum);
     expect(after).toEqual(before);
+  }, 30000);
+
+  it("recovers snapshot state plus the post-snapshot AOF tail after a hard kill", async () => {
+    dataDir = mkdtempSync(join(tmpdir(), "shardis-crash-snapshot-"));
+    const port = randomPort();
+    const snapshotPath = join(dataDir, "snapshot.json");
+    const aofPath = join(dataDir, "aof.log");
+
+    // A short interval so the periodic snapshot fires deterministically
+    // within the test instead of relying on the production default.
+    child = spawnNode(port, dataDir, { SNAPSHOT_INTERVAL_MS: "200" });
+    const socket = await connectWithRetry(`ws://127.0.0.1:${port}/ws`);
+
+    const beforeSnapshotKeys = Array.from({ length: 10 }, (_, i) => `pre-${i}`);
+    for (const key of beforeSnapshotKeys) {
+      await send(socket, { id: key, op: "SET", key, value: `${key}-value` });
+    }
+
+    await waitUntil(() => existsSync(snapshotPath), 5000, "snapshot.json to be written");
+    // The AOF is truncated in the same synchronous pass as the snapshot
+    // write, so once the snapshot exists the tail holds only what comes next.
+
+    const afterSnapshotKeys = Array.from({ length: 5 }, (_, i) => `post-${i}`);
+    for (const key of afterSnapshotKeys) {
+      await send(socket, { id: key, op: "SET", key, value: `${key}-value` });
+    }
+
+    const allKeys = [...beforeSnapshotKeys, ...afterSnapshotKeys];
+    const before: Record<string, unknown> = {};
+    for (const key of allKeys) {
+      before[key] = (await send(socket, { id: `get-${key}`, op: "GET", key })).value;
+    }
+
+    expect(existsSync(aofPath)).toBe(true);
+
+    socket.close();
+    child.kill("SIGKILL");
+    await waitForExit(child);
+    child = null;
+
+    child = spawnNode(port, dataDir, { SNAPSHOT_INTERVAL_MS: "200" });
+    const socket2 = await connectWithRetry(`ws://127.0.0.1:${port}/ws`);
+
+    const after: Record<string, unknown> = {};
+    for (const key of allKeys) {
+      after[key] = (await send(socket2, { id: `get2-${key}`, op: "GET", key })).value;
+    }
+    socket2.close();
+
+    expect(after).toEqual(before);
+    expect(after["pre-0"]).toBe("pre-0-value");
+    expect(after["post-0"]).toBe("post-0-value");
   }, 30000);
 });
