@@ -183,4 +183,67 @@ describe("Store", () => {
     // Reading via dump() must not have swept the expired entry as a side effect.
     expect(store.size).toBe(2);
   });
+
+  describe("LRU eviction under maxmemoryBytes", () => {
+    // Each key/value below is deliberately sized so every entry is exactly
+    // 10 bytes ("k0"+"0".repeat(8) etc.), making byte-cap math exact.
+    function sizedEntry(store: Store, key: string, valueLen: number): void {
+      store.set(key, "v".repeat(valueLen));
+    }
+
+    it("does not evict when no maxmemoryBytes cap is configured", () => {
+      const store = new Store();
+      for (let i = 0; i < 1000; i += 1) sizedEntry(store, `key-${i}`, 100);
+      expect(store.evictions).toBe(0);
+      expect(store.size).toBe(1000);
+    });
+
+    it("evicts the least-recently-used entry first once over the cap", () => {
+      // "a"/"b"/"c" are each 1 (key) + 1 (value) = 2 bytes; cap of 4 bytes
+      // holds exactly two entries.
+      const store = new Store({ maxmemoryBytes: 4 });
+      store.set("a", "1");
+      store.set("b", "2");
+      expect(store.evictions).toBe(0);
+
+      store.set("c", "3");
+      expect(store.evictions).toBe(1);
+      // "a" was least-recently-used (written first, never touched again).
+      expect(store.has("a")).toBe(false);
+      expect(store.get("b")).toBe("2");
+      expect(store.get("c")).toBe("3");
+    });
+
+    it("a GET touch protects a key from being the next eviction victim", () => {
+      const store = new Store({ maxmemoryBytes: 4 });
+      store.set("a", "1");
+      store.set("b", "2");
+      store.get("a"); // touch "a" - "b" is now the least-recently-used
+
+      store.set("c", "3");
+      expect(store.has("b")).toBe(false);
+      expect(store.get("a")).toBe("1");
+      expect(store.get("c")).toBe("3");
+    });
+
+    it("evicts multiple entries in one write if needed to get back under cap", () => {
+      const store = new Store({ maxmemoryBytes: 4 });
+      store.set("a", "1");
+      store.set("b", "2");
+      // A larger value can require evicting more than one older entry.
+      store.set("c", "34");
+      expect(store.has("a")).toBe(false);
+      expect(store.has("b")).toBe(false);
+      expect(store.get("c")).toBe("34");
+      expect(store.evictions).toBe(2);
+    });
+
+    it("overwriting an existing key accounts for its old size, not double-counting it", () => {
+      const store = new Store({ maxmemoryBytes: 4 });
+      store.set("a", "1");
+      store.set("a", "11"); // still within cap: 1(key)+2(value)=3 <= 4
+      expect(store.evictions).toBe(0);
+      expect(store.get("a")).toBe("11");
+    });
+  });
 });

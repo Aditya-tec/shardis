@@ -111,6 +111,26 @@ describe("app WS protocol", () => {
     await new Promise<void>((resolve) => smallApp.server.close(() => resolve()));
   });
 
+  it("MAXMEMORY_MB config wires through to real LRU eviction on the running store", async () => {
+    // maxmemoryMb: 0 means a 0-byte cap, so the write that just landed is
+    // itself immediately over cap and gets evicted straight away - the
+    // cheapest way to prove the config value actually reaches Store.
+    const { url: tinyUrl, app: tinyApp } = await startApp({ maxmemoryMb: 0 });
+    const tinySocket = await connect(tinyUrl);
+
+    tinySocket.send(JSON.stringify({ id: "1", op: "SET", key: "foo", value: "bar" }));
+    expect(await nextMessage(tinySocket)).toEqual({ id: "1", ok: true });
+
+    tinySocket.send(JSON.stringify({ id: "2", op: "GET", key: "foo" }));
+    expect(await nextMessage(tinySocket)).toEqual({ id: "2", ok: true, value: null });
+    expect(tinyApp.store.evictions).toBeGreaterThan(0);
+
+    tinySocket.close();
+    tinyApp.wss.close();
+    tinyApp.close();
+    await new Promise<void>((resolve) => tinyApp.server.close(() => resolve()));
+  });
+
   it("a second connection is unaffected by malformed input on the first", async () => {
     const other = await connect(url);
 

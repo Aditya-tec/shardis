@@ -5,27 +5,39 @@ export interface StoreEntry {
 
 export interface StoreOptions {
   now?: () => number;
+  // Approximate byte cap on total key+value size. When set() pushes usage
+  // over this, the least-recently-used entries are evicted until back
+  // under cap. Undefined means no eviction.
+  maxmemoryBytes?: number;
 }
 
 export class Store {
+  // Iteration order of a Map is insertion order, and re-inserting a key
+  // (delete then set) moves it to the end. Every read/write that "uses" a
+  // key does that, so the map's own order becomes the LRU order for free:
+  // the front is always the least-recently-used entry.
   private readonly data = new Map<string, StoreEntry>();
   private readonly now: () => number;
+  private readonly maxmemoryBytes: number | undefined;
+  private approxBytes = 0;
+  private evictedCount = 0;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: StoreOptions = {}) {
     this.now = options.now ?? Date.now;
+    this.maxmemoryBytes = options.maxmemoryBytes;
   }
 
   set(key: string, value: string, ttlMs?: number): void {
     const expiresAt = ttlMs !== undefined ? this.now() + ttlMs : null;
-    this.data.set(key, { value, expiresAt });
+    this.write(key, value, expiresAt);
   }
 
   // Writes an entry with an already-resolved absolute expiry instead of a
   // ttl relative to now(). Used by AOF/snapshot replay so a key's remaining
   // lifetime survives a restart instead of restarting its ttl countdown.
   restoreSet(key: string, value: string, expiresAt: number | null): void {
-    this.data.set(key, { value, expiresAt });
+    this.write(key, value, expiresAt);
   }
 
   restoreExpire(key: string, expiresAt: number): void {
@@ -37,9 +49,10 @@ export class Store {
     const entry = this.data.get(key);
     if (!entry) return undefined;
     if (this.isExpired(entry)) {
-      this.data.delete(key);
+      this.removeEntry(key, entry);
       return undefined;
     }
+    this.touch(key, entry);
     return entry.value;
   }
 
@@ -48,15 +61,16 @@ export class Store {
   }
 
   del(key: string): boolean {
-    const hadKey = this.has(key);
-    this.data.delete(key);
-    return hadKey;
+    const entry = this.data.get(key);
+    if (!entry) return false;
+    this.removeEntry(key, entry);
+    return true;
   }
 
   expire(key: string, ttlMs: number): boolean {
     const entry = this.data.get(key);
     if (!entry || this.isExpired(entry)) {
-      this.data.delete(key);
+      if (entry) this.removeEntry(key, entry);
       return false;
     }
     entry.expiresAt = this.now() + ttlMs;
@@ -72,6 +86,10 @@ export class Store {
 
   get size(): number {
     return this.data.size;
+  }
+
+  get evictions(): number {
+    return this.evictedCount;
   }
 
   keys(): IterableIterator<string> {
@@ -94,11 +112,46 @@ export class Store {
     return entry.expiresAt !== null && entry.expiresAt <= this.now();
   }
 
+  private entrySize(key: string, value: string): number {
+    return Buffer.byteLength(key, "utf8") + Buffer.byteLength(value, "utf8");
+  }
+
+  private write(key: string, value: string, expiresAt: number | null): void {
+    const existing = this.data.get(key);
+    if (existing) this.approxBytes -= this.entrySize(key, existing.value);
+    this.data.delete(key);
+    this.data.set(key, { value, expiresAt });
+    this.approxBytes += this.entrySize(key, value);
+    this.evictIfOverCap();
+  }
+
+  private touch(key: string, entry: StoreEntry): void {
+    this.data.delete(key);
+    this.data.set(key, entry);
+  }
+
+  private removeEntry(key: string, entry: StoreEntry): void {
+    this.data.delete(key);
+    this.approxBytes -= this.entrySize(key, entry.value);
+  }
+
+  private evictIfOverCap(): void {
+    if (this.maxmemoryBytes === undefined) return;
+    while (this.approxBytes > this.maxmemoryBytes && this.data.size > 0) {
+      const oldestKey = this.data.keys().next().value;
+      if (oldestKey === undefined) break;
+      const entry = this.data.get(oldestKey);
+      if (!entry) break;
+      this.removeEntry(oldestKey, entry);
+      this.evictedCount += 1;
+    }
+  }
+
   sweepExpired(): number {
     let removed = 0;
     for (const [key, entry] of this.data) {
       if (this.isExpired(entry)) {
-        this.data.delete(key);
+        this.removeEntry(key, entry);
         removed += 1;
       }
     }

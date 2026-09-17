@@ -30,7 +30,7 @@ function makeLogger(nodeId: string) {
 }
 
 export function createApp(config: NodeConfig, startedAt = Date.now()): App {
-  const store = new Store();
+  const store = new Store({ maxmemoryBytes: config.maxmemoryMb * 1024 * 1024 });
   const log = makeLogger(config.nodeId);
 
   const snapshotPath = join(config.dataDir, "snapshot.json");
@@ -60,6 +60,8 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
 
   const snapshotTimer = setInterval(snapshotNow, config.snapshotIntervalMs);
   snapshotTimer.unref?.();
+
+  store.startSweep(config.ttlSweepIntervalMs);
 
   const server = createServer((req, res) => {
     if (req.method === "GET" && req.url === "/healthz") {
@@ -136,6 +138,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
     snapshotNow,
     close: () => {
       clearInterval(snapshotTimer);
+      store.stopSweep();
       aofLog.close();
     }
   };
