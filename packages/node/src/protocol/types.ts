@@ -1,4 +1,6 @@
-export type RequestOp = "SET" | "GET" | "DEL" | "EXPIRE";
+export type StoreOp = "SET" | "GET" | "DEL" | "EXPIRE";
+export type PubSubOp = "SUBSCRIBE" | "UNSUBSCRIBE" | "PUBLISH";
+export type RequestOp = StoreOp | PubSubOp;
 
 interface BaseRequest {
   id: string;
@@ -28,7 +30,29 @@ export interface ExpireRequest extends BaseRequest {
   ttl_ms: number;
 }
 
-export type Request = SetRequest | GetRequest | DelRequest | ExpireRequest;
+export interface SubscribeRequest extends BaseRequest {
+  op: "SUBSCRIBE";
+  channel: string;
+}
+
+export interface UnsubscribeRequest extends BaseRequest {
+  op: "UNSUBSCRIBE";
+  channel: string;
+}
+
+export interface PublishRequest extends BaseRequest {
+  op: "PUBLISH";
+  channel: string;
+  message: string;
+}
+
+export type StoreRequest = SetRequest | GetRequest | DelRequest | ExpireRequest;
+export type PubSubRequest = SubscribeRequest | UnsubscribeRequest | PublishRequest;
+export type Request = StoreRequest | PubSubRequest;
+
+export function isStoreRequest(request: Request): request is StoreRequest {
+  return request.op === "SET" || request.op === "GET" || request.op === "DEL" || request.op === "EXPIRE";
+}
 
 export interface OkResponse {
   id: string;
@@ -36,6 +60,9 @@ export interface OkResponse {
   value?: string | null;
   deleted?: boolean;
   updated?: boolean;
+  subscribed?: boolean;
+  unsubscribed?: boolean;
+  delivered?: number;
 }
 
 export interface ErrResponse {

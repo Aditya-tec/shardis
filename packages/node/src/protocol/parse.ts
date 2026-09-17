@@ -7,7 +7,15 @@ export interface ParseLimits {
 
 export type ParseResult = { ok: true; request: Request } | { ok: false; response: ErrResponse };
 
-const KNOWN_OPS: ReadonlySet<RequestOp> = new Set(["SET", "GET", "DEL", "EXPIRE"]);
+const KNOWN_OPS: ReadonlySet<RequestOp> = new Set([
+  "SET",
+  "GET",
+  "DEL",
+  "EXPIRE",
+  "SUBSCRIBE",
+  "UNSUBSCRIBE",
+  "PUBLISH"
+]);
 
 function err(id: string | null, error: string): ParseResult {
   return { ok: false, response: { id, ok: false, error } };
@@ -64,9 +72,23 @@ export function parseRequest(raw: string, limits: ParseLimits): ParseResult {
     return { ok: true, request: { id, op, key: body.key } };
   }
 
-  // EXPIRE
-  if (typeof body.key !== "string") return err(id, "missing_key");
-  if (typeof body.ttl_ms !== "number" || !Number.isFinite(body.ttl_ms)) return err(id, "invalid_ttl");
-  if (keyTooLarge(body.key, limits.maxKeyBytes)) return err(id, "key_too_large");
-  return { ok: true, request: { id, op, key: body.key, ttl_ms: body.ttl_ms } };
+  if (op === "EXPIRE") {
+    if (typeof body.key !== "string") return err(id, "missing_key");
+    if (typeof body.ttl_ms !== "number" || !Number.isFinite(body.ttl_ms)) return err(id, "invalid_ttl");
+    if (keyTooLarge(body.key, limits.maxKeyBytes)) return err(id, "key_too_large");
+    return { ok: true, request: { id, op, key: body.key, ttl_ms: body.ttl_ms } };
+  }
+
+  if (op === "SUBSCRIBE" || op === "UNSUBSCRIBE") {
+    if (typeof body.channel !== "string") return err(id, "missing_channel");
+    if (keyTooLarge(body.channel, limits.maxKeyBytes)) return err(id, "channel_too_large");
+    return { ok: true, request: { id, op, channel: body.channel } };
+  }
+
+  // PUBLISH
+  if (typeof body.channel !== "string") return err(id, "missing_channel");
+  if (typeof body.message !== "string") return err(id, "missing_message");
+  if (keyTooLarge(body.channel, limits.maxKeyBytes)) return err(id, "channel_too_large");
+  if (valueTooLarge(body.message, limits.maxValueBytes)) return err(id, "message_too_large");
+  return { ok: true, request: { id, op, channel: body.channel, message: body.message } };
 }

@@ -131,6 +131,54 @@ describe("app WS protocol", () => {
     await new Promise<void>((resolve) => tinyApp.server.close(() => resolve()));
   });
 
+  it("PUBLISH delivers to a SUBSCRIBE'd connection but not to an unrelated one (two concurrent sessions)", async () => {
+    const subscriber = await connect(url);
+    const bystander = await connect(url);
+
+    subscriber.send(JSON.stringify({ id: "1", op: "SUBSCRIBE", channel: "events" }));
+    expect(await nextMessage(subscriber)).toEqual({ id: "1", ok: true, subscribed: true });
+
+    const bystanderMessages: unknown[] = [];
+    bystander.on("message", (data) => bystanderMessages.push(JSON.parse(data.toString("utf8"))));
+
+    const pushPromise = nextMessage(subscriber);
+    socket.send(JSON.stringify({ id: "2", op: "PUBLISH", channel: "events", message: "hello" }));
+    expect(await nextMessage(socket)).toEqual({ id: "2", ok: true, delivered: 1 });
+    expect(await pushPromise).toEqual({ type: "MESSAGE", channel: "events", message: "hello" });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(bystanderMessages).toEqual([]);
+
+    subscriber.close();
+    bystander.close();
+  });
+
+  it("UNSUBSCRIBE stops further delivery to that connection", async () => {
+    const subscriber = await connect(url);
+    subscriber.send(JSON.stringify({ id: "1", op: "SUBSCRIBE", channel: "events" }));
+    await nextMessage(subscriber);
+
+    subscriber.send(JSON.stringify({ id: "2", op: "UNSUBSCRIBE", channel: "events" }));
+    expect(await nextMessage(subscriber)).toEqual({ id: "2", ok: true, unsubscribed: true });
+
+    socket.send(JSON.stringify({ id: "3", op: "PUBLISH", channel: "events", message: "hello" }));
+    expect(await nextMessage(socket)).toEqual({ id: "3", ok: true, delivered: 0 });
+
+    subscriber.close();
+  });
+
+  it("disconnecting a subscriber cleanly drops it from the broker (no leaked listener)", async () => {
+    const subscriber = await connect(url);
+    subscriber.send(JSON.stringify({ id: "1", op: "SUBSCRIBE", channel: "events" }));
+    await nextMessage(subscriber);
+    expect(app.pubsub.channelSubscriberCount("events")).toBe(1);
+
+    subscriber.close();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(app.pubsub.channelSubscriberCount("events")).toBe(0);
+  });
+
   it("a second connection is unaffected by malformed input on the first", async () => {
     const other = await connect(url);
 

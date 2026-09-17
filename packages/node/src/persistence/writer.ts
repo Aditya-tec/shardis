@@ -1,4 +1,4 @@
-import type { Request } from "../protocol/types.js";
+import type { StoreRequest } from "../protocol/types.js";
 import type { AofEntry } from "./aof.js";
 
 // Returns the durable entry a write request must produce, or null for a
@@ -6,7 +6,7 @@ import type { AofEntry } from "./aof.js";
 // exist? was DEL a no-op?) are deliberately not made here - both the live
 // dispatch and AOF replay independently no-op on a missing key, so the
 // two stay consistent without this needing to know the store's state.
-export function entryForRequest(request: Request, now: () => number): AofEntry | null {
+export function entryForRequest(request: StoreRequest, now: () => number): AofEntry | null {
   switch (request.op) {
     case "SET":
       return {

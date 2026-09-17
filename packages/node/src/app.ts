@@ -9,13 +9,16 @@ import { loadSnapshot, writeSnapshotAtomic } from "./persistence/snapshot.js";
 import { entryForRequest } from "./persistence/writer.js";
 import { dispatch } from "./protocol/dispatch.js";
 import { parseRequest } from "./protocol/parse.js";
-import type { ErrResponse } from "./protocol/types.js";
+import { isStoreRequest, type ErrResponse } from "./protocol/types.js";
+import { PubSubBroker, type Subscriber } from "./pubsub/broker.js";
+import { dispatchPubSub } from "./pubsub/dispatch.js";
 
 export interface App {
   server: Server;
   wss: WebSocketServer;
   store: Store;
   aofLog: AofLog;
+  pubsub: PubSubBroker;
   log: (event: string, fields?: Record<string, unknown>) => void;
   snapshotNow: () => void;
   close: () => void;
@@ -31,6 +34,7 @@ function makeLogger(nodeId: string) {
 
 export function createApp(config: NodeConfig, startedAt = Date.now()): App {
   const store = new Store({ maxmemoryBytes: config.maxmemoryMb * 1024 * 1024 });
+  const pubsub = new PubSubBroker();
   const log = makeLogger(config.nodeId);
 
   const snapshotPath = join(config.dataDir, "snapshot.json");
@@ -89,6 +93,8 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
   });
 
   wss.on("connection", (socket: WebSocket) => {
+    const subscriber: Subscriber = { send: (data: string) => socket.send(data) };
+
     socket.on("message", (data) => {
       // A single bad frame must produce an error response, never take the
       // connection or the process down with it.
@@ -106,23 +112,32 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
           return;
         }
 
-        const aofEntry = entryForRequest(result.request, Date.now);
-        if (aofEntry) {
-          // Durably persisted before the write is applied or acked, so a
-          // crash between here and the ack can never lose it on replay.
-          aofLog.append(aofEntry);
+        if (isStoreRequest(result.request)) {
+          const aofEntry = entryForRequest(result.request, Date.now);
+          if (aofEntry) {
+            // Durably persisted before the write is applied or acked, so a
+            // crash between here and the ack can never lose it on replay.
+            aofLog.append(aofEntry);
+          }
+
+          const response = dispatch(result.request, store);
+          if (result.request.op !== "GET") {
+            log("write_applied", { op: result.request.op, key: result.request.key });
+          }
+          socket.send(JSON.stringify(response));
+          return;
         }
 
-        const response = dispatch(result.request, store);
-        if (result.request.op !== "GET") {
-          log("write_applied", { op: result.request.op, key: result.request.key });
-        }
+        const response = dispatchPubSub(result.request, pubsub, subscriber);
+        log("pubsub_event", { op: result.request.op, channel: result.request.channel });
         socket.send(JSON.stringify(response));
       } catch (error) {
         log("message_handler_error", { error: error instanceof Error ? error.message : String(error) });
         socket.send(JSON.stringify({ id: null, ok: false, error: "internal_error" }));
       }
     });
+
+    socket.on("close", () => pubsub.unsubscribeAll(subscriber));
 
     socket.on("error", (error) => {
       log("connection_error", { error: error.message });
@@ -134,6 +149,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
     wss,
     store,
     aofLog,
+    pubsub,
     log,
     snapshotNow,
     close: () => {

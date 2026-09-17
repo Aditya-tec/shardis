@@ -1,7 +1,7 @@
 import type { Store } from "../engine/store.js";
-import type { OkResponse, Request } from "./types.js";
+import type { OkResponse, StoreRequest } from "./types.js";
 
-export function dispatch(request: Request, store: Store): OkResponse {
+export function dispatch(request: StoreRequest, store: Store): OkResponse {
   switch (request.op) {
     case "SET":
       store.set(request.key, request.value, request.ttl_ms);

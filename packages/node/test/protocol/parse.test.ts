@@ -107,6 +107,54 @@ describe("parseRequest", () => {
     if (!result.ok) expect(result.response.error).toBe("value_too_large");
   });
 
+  it("parses a valid SUBSCRIBE request", () => {
+    const result = parseRequest(JSON.stringify({ id: "1", op: "SUBSCRIBE", channel: "events" }), limits);
+    expect(result).toEqual({ ok: true, request: { id: "1", op: "SUBSCRIBE", channel: "events" } });
+  });
+
+  it("parses a valid UNSUBSCRIBE request", () => {
+    const result = parseRequest(JSON.stringify({ id: "1", op: "UNSUBSCRIBE", channel: "events" }), limits);
+    expect(result).toEqual({ ok: true, request: { id: "1", op: "UNSUBSCRIBE", channel: "events" } });
+  });
+
+  it("parses a valid PUBLISH request", () => {
+    const result = parseRequest(
+      JSON.stringify({ id: "1", op: "PUBLISH", channel: "events", message: "hi" }),
+      limits
+    );
+    expect(result).toEqual({ ok: true, request: { id: "1", op: "PUBLISH", channel: "events", message: "hi" } });
+  });
+
+  it("rejects SUBSCRIBE missing a channel", () => {
+    const result = parseRequest(JSON.stringify({ id: "1", op: "SUBSCRIBE" }), limits);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.response.error).toBe("missing_channel");
+  });
+
+  it("rejects PUBLISH missing a message", () => {
+    const result = parseRequest(JSON.stringify({ id: "1", op: "PUBLISH", channel: "events" }), limits);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.response.error).toBe("missing_message");
+  });
+
+  it("rejects a channel over the configured byte limit", () => {
+    const result = parseRequest(
+      JSON.stringify({ id: "1", op: "SUBSCRIBE", channel: "a-channel-name-way-too-long" }),
+      limits
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.response.error).toBe("channel_too_large");
+  });
+
+  it("rejects a PUBLISH message over the configured byte limit", () => {
+    const result = parseRequest(
+      JSON.stringify({ id: "1", op: "PUBLISH", channel: "events", message: "a".repeat(64) }),
+      limits
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.response.error).toBe("message_too_large");
+  });
+
   it("measures size limits in bytes, not characters, for multi-byte utf8", () => {
     // "é" is 2 bytes in utf8; 9 copies is 18 bytes > the 16-byte key limit.
     const key = "é".repeat(9);
