@@ -14,6 +14,7 @@ import { parseRequest } from "./protocol/parse.js";
 import { isStoreRequest, type ErrResponse } from "./protocol/types.js";
 import { PubSubBroker, type Subscriber } from "./pubsub/broker.js";
 import { dispatchPubSub } from "./pubsub/dispatch.js";
+import { ReplicationManager } from "./replication/manager.js";
 
 export interface App {
   server: Server;
@@ -22,6 +23,7 @@ export interface App {
   aofLog: AofLog;
   pubsub: PubSubBroker;
   ring: HashRing;
+  replication: ReplicationManager;
   log: (event: string, fields?: Record<string, unknown>) => void;
   snapshotNow: () => void;
   close: () => void;
@@ -39,7 +41,12 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
   const store = new Store({ maxmemoryBytes: config.maxmemoryMb * 1024 * 1024 });
   const pubsub = new PubSubBroker();
   const log = makeLogger(config.nodeId);
-  const ring = new HashRing(loadClusterConfig(config.clusterConfigPath));
+  const clusterConfig = loadClusterConfig(config.clusterConfigPath);
+  const ring = new HashRing(clusterConfig);
+
+  const ownShard = clusterConfig.shards.find((shard) => shard.id === config.shardId);
+  if (!ownShard) throw new Error(`SHARD_ID "${config.shardId}" not found in cluster config`);
+  const shardPeers = [ownShard.leader, ...ownShard.followers].filter((node) => node.id !== config.nodeId);
 
   const snapshotPath = join(config.dataDir, "snapshot.json");
   const snapshot = loadSnapshot(snapshotPath);
@@ -58,6 +65,19 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
   if (replayed.length > 0) {
     log("aof_replayed", { entries: replayed.length, keys: store.size });
   }
+
+  const replication = new ReplicationManager({
+    nodeId: config.nodeId,
+    shardId: config.shardId,
+    peers: shardPeers,
+    initialLeaderId: ownShard.leader.id,
+    heartbeatIntervalMs: config.heartbeatIntervalMs,
+    heartbeatTimeoutMs: config.heartbeatTimeoutMs,
+    store,
+    aofLog,
+    log
+  });
+  replication.start();
 
   function snapshotNow(): void {
     const entries = store.dump();
@@ -78,7 +98,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
         JSON.stringify({
           status: "ok",
           node_id: config.nodeId,
-          role: config.role,
+          role: replication.isLeader() ? "leader" : "follower",
           shard: config.shardId,
           uptime_s: Math.floor((Date.now() - startedAt) / 1000)
         })
@@ -104,6 +124,8 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
       // connection or the process down with it.
       try {
         const raw = data.toString("utf8");
+        if (replication.handleInboundRaw(socket, raw)) return;
+
         const result = parseRequest(raw, {
           maxKeyBytes: config.maxKeyBytes,
           maxValueBytes: config.maxValueBytes
@@ -132,6 +154,21 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
             return;
           }
 
+          const isWrite = result.request.op !== "GET";
+          if (isWrite && !replication.isLeader()) {
+            log("moved_redirect", { key: result.request.key, shard: config.shardId, reason: "not_leader" });
+            socket.send(
+              JSON.stringify({
+                id: result.request.id,
+                ok: false,
+                error: "MOVED",
+                shard: config.shardId,
+                leader: replication.getCurrentLeaderUrl()
+              })
+            );
+            return;
+          }
+
           const aofEntry = entryForRequest(result.request, Date.now);
           if (aofEntry) {
             // Durably persisted before the write is applied or acked, so a
@@ -140,8 +177,9 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
           }
 
           const response = dispatch(result.request, store);
-          if (result.request.op !== "GET") {
+          if (isWrite) {
             log("write_applied", { op: result.request.op, key: result.request.key });
+            if (aofEntry) replication.afterLocalWrite(aofEntry);
           }
           socket.send(JSON.stringify(response));
           return;
@@ -170,11 +208,13 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
     aofLog,
     pubsub,
     ring,
+    replication,
     log,
     snapshotNow,
     close: () => {
       clearInterval(snapshotTimer);
       store.stopSweep();
+      replication.stop();
       aofLog.close();
     }
   };

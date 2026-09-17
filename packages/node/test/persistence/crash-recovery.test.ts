@@ -19,7 +19,9 @@ function spawnNode(port: number, dataDir: string, envOverrides: Record<string, s
     cwd: packageRoot,
     env: {
       ...process.env,
-      NODE_ID: "node-crash-test",
+      // Must match the fixture's declared shard-a leader id, so this node
+      // boots up already believing itself the leader and can accept writes.
+      NODE_ID: "node-test",
       ROLE: "leader",
       SHARD_ID: "shard-a",
       PORT: String(port),

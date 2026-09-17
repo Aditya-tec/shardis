@@ -13,7 +13,10 @@ const TWO_SHARD_FIXTURE = fileURLToPath(new URL("../fixtures/cluster.two-shard.j
 
 function testConfig(overrides: Partial<NodeConfig>): NodeConfig {
   return {
-    nodeId: "node-test",
+    // Matches the two-shard fixture's declared shard-a leader id, so this
+    // node boots up already believing itself the (sole, peer-less) leader
+    // of its shard and can serve local writes without a MOVED "not_leader".
+    nodeId: "node-a1",
     role: "leader",
     shardId: "shard-a",
     clusterConfigPath: TWO_SHARD_FIXTURE,
@@ -118,7 +121,7 @@ describe("MOVED routing across shards", () => {
 
   it("the shard that actually owns a MOVED key serves it directly", async () => {
     const { url: urlA } = await registerApp({ shardId: "shard-a" });
-    const { url: urlB } = await registerApp({ shardId: "shard-b", nodeId: "node-b-test" });
+    const { url: urlB } = await registerApp({ shardId: "shard-b", nodeId: "node-b1" });
 
     const socketA = await connect(urlA);
     const socketB = await connect(urlB);
