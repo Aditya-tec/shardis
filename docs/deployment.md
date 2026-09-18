@@ -84,6 +84,14 @@ there's no dynamic service-discovery in this v1 design; see
 
 ## Advanced node modes
 
+### TLS termination
+
+The Shardis node does not load certificates or terminate TLS itself. Put it
+behind the platform's TLS endpoint or a reverse proxy such as nginx, Caddy,
+or Traefik. The proxy should expose `wss://` to clients and forward WebSocket
+traffic to the private node endpoint over `ws://`. Do not publish the node's
+plain port directly to the internet.
+
 The public Render topology remains deterministic by default. For a self-hosted
 deployment, set `FAILOVER_MODE=raft` on every node in a shard to use the
 opt-in Raft-lite controller. It provides term-based elections and majority

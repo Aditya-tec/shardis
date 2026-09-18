@@ -13,6 +13,7 @@ with:
   - `test`
   - `compose-smoke`
   - `Analyze TypeScript`
+  - `Gitleaks`
 - Require branches to be up to date before merging.
 - Block force pushes and branch deletion.
 - Do not allow bypassing the rule except for a deliberate administrator break-
@@ -29,6 +30,7 @@ status context.
   every package, runs all tests, and starts the six-node Compose cluster for a
   real CLI write/read smoke test.
 - `codeql.yml` scans TypeScript on pushes, pull requests, and weekly.
+- `secrets.yml` runs Gitleaks on pushes, pull requests, and weekly.
 - `nightly-chaos.yml` starts Compose, writes data, SIGKILLs `node-a1`, asserts
   `node-a2` promotion and post-failover writes, restarts `node-a1`, and always
   removes the cluster.
@@ -36,6 +38,12 @@ status context.
   dated benchmark results.
 - `release.yml` publishes `ghcr.io/<owner>/shardis` for tags matching
   `v*.*.*`.
+
+## Security boundary
+
+The node uses plain `ws://` internally. TLS is expected to terminate at the
+reverse proxy or managed platform in front of it; clients should only receive
+`wss://` endpoints. Do not add a public node port without TLS termination.
 
 ## Release process
 

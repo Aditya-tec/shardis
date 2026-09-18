@@ -149,6 +149,18 @@ the complete set. The most important values are:
 - WebSocket requests use `GET`, `SET`, `DEL`, `EXPIRE`, `SUBSCRIBE`,
   `UNSUBSCRIBE`, and `PUBLISH`.
 
+## Transport security
+
+The node speaks plain `ws://` and does not terminate TLS in-process. This is
+intentional: production traffic must pass through a TLS-terminating reverse
+proxy or managed platform endpoint and reach clients as `wss://`. Do not
+publish a node's plain WebSocket port directly to the internet.
+
+Local Compose is open for development. The public demo adds a shared
+`DEMO_WRITE_KEY` for mutating requests; it is a demo safeguard, not per-user
+authentication or tenant isolation. See [SECURITY.md](SECURITY.md) for the
+reporting policy and deployment boundary.
+
 ## Repository layout
 
 ```text
