@@ -3,8 +3,9 @@ import { createInterface } from "node:readline";
 import { ShardisClient, type ShardisResponse } from "./client.js";
 import { CommandError, parseCommand, parseCommandTokens } from "./commands.js";
 
-function parseArgv(argv: string[]): { url: string; command: string[] } {
+function parseArgv(argv: string[]): { url: string; writeKey: string | undefined; command: string[] } {
   let url = process.env.SHARDIS_URL ?? "ws://localhost:7000/ws";
+  let writeKey = process.env.SHARDIS_WRITE_KEY;
   const rest: string[] = [];
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -14,20 +15,29 @@ function parseArgv(argv: string[]): { url: string; command: string[] } {
       url = argv[i];
       continue;
     }
+    // Required only against a node running with PUBLIC_DEMO=true; ignored
+    // (harmlessly) by any node that isn't gating writes.
+    if (argv[i] === "--write-key" || argv[i] === "-k") {
+      i += 1;
+      if (argv[i] === undefined) throw new CommandError("--write-key requires a value");
+      writeKey = argv[i];
+      continue;
+    }
     rest.push(argv[i]);
   }
 
-  return { url, command: rest };
+  return { url, writeKey, command: rest };
 }
 
 function printPush(message: ShardisResponse): void {
   console.log(`[event] ${JSON.stringify(message)}`);
 }
 
-async function runOneShot(client: ShardisClient, command: string[]): Promise<number> {
+async function runOneShot(client: ShardisClient, command: string[], writeKey: string | undefined): Promise<number> {
   try {
     const request = parseCommandTokens(command);
     if (!request) return 0;
+    if (writeKey) request.write_key = writeKey;
     const response = await client.send(request);
     console.log(JSON.stringify(response));
     return response.ok ? 0 : 1;
@@ -37,7 +47,7 @@ async function runOneShot(client: ShardisClient, command: string[]): Promise<num
   }
 }
 
-async function runRepl(client: ShardisClient): Promise<void> {
+async function runRepl(client: ShardisClient, writeKey: string | undefined): Promise<void> {
   console.log(`shardis-cli connected to ${client.currentUrl}`);
   console.log("commands: SET GET DEL EXPIRE SUBSCRIBE PUBLISH UNSUBSCRIBE QUIT");
 
@@ -59,6 +69,7 @@ async function runRepl(client: ShardisClient): Promise<void> {
       try {
         const request = parseCommand(trimmed);
         if (request) {
+          if (writeKey) request.write_key = writeKey;
           const response = await client.send(request);
           console.log(JSON.stringify(response));
         }
@@ -73,16 +84,16 @@ async function runRepl(client: ShardisClient): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const { url, command } = parseArgv(process.argv.slice(2));
+  const { url, writeKey, command } = parseArgv(process.argv.slice(2));
   const client = new ShardisClient(url, printPush);
   await client.connect();
 
   try {
     if (command.length > 0) {
-      const code = await runOneShot(client, command);
+      const code = await runOneShot(client, command, writeKey);
       process.exitCode = code;
     } else {
-      await runRepl(client);
+      await runRepl(client, writeKey);
     }
   } finally {
     client.close();

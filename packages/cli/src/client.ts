@@ -8,6 +8,7 @@ export interface ShardisRequest {
   ttl_ms?: number;
   channel?: string;
   message?: string;
+  write_key?: string;
 }
 
 export interface ShardisResponse {

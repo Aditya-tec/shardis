@@ -15,6 +15,7 @@ import { isStoreRequest, type ErrResponse } from "./protocol/types.js";
 import { PubSubBroker, type Subscriber } from "./pubsub/broker.js";
 import { dispatchPubSub } from "./pubsub/dispatch.js";
 import { ReplicationManager } from "./replication/manager.js";
+import { TokenBucket } from "./security/rateLimit.js";
 
 export interface App {
   server: Server;
@@ -172,12 +173,20 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
   wss.on("connection", (socket: WebSocket) => {
     const subscriber: Subscriber = { send: (data: string) => socket.send(data) };
 
+    const rateLimiter = new TokenBucket(config.rateLimitRps, config.rateLimitRps);
+
     socket.on("message", (data) => {
       // A single bad frame must produce an error response, never take the
       // connection or the process down with it.
       try {
         const raw = data.toString("utf8");
         if (replication.handleInboundRaw(socket, raw)) return;
+
+        if (!rateLimiter.tryConsume()) {
+          log("client_rejected", { error: "rate_limited" });
+          socket.send(JSON.stringify({ id: null, ok: false, error: "rate_limited" }));
+          return;
+        }
 
         if (raw.includes('"DASHBOARD_SUBSCRIBE"')) {
           let parsed: unknown;
@@ -209,6 +218,12 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
           const isWriteOp = result.request.op !== "GET";
           if (shuttingDown && isWriteOp) {
             socket.send(JSON.stringify({ id: result.request.id, ok: false, error: "shutting_down" }));
+            return;
+          }
+
+          if (config.publicDemo && result.request.op !== "GET" && result.request.write_key !== config.demoWriteKey) {
+            log("client_rejected", { error: "write_key_required", op: result.request.op });
+            socket.send(JSON.stringify({ id: result.request.id, ok: false, error: "write_key_required" }));
             return;
           }
 
@@ -255,6 +270,12 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
             if (aofEntry) replication.afterLocalWrite(aofEntry);
           }
           socket.send(JSON.stringify(response));
+          return;
+        }
+
+        if (config.publicDemo && result.request.op === "PUBLISH" && result.request.write_key !== config.demoWriteKey) {
+          log("client_rejected", { error: "write_key_required", op: result.request.op });
+          socket.send(JSON.stringify({ id: result.request.id, ok: false, error: "write_key_required" }));
           return;
         }
 

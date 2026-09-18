@@ -7,7 +7,14 @@ interface BaseRequest {
   op: RequestOp;
 }
 
-export interface SetRequest extends BaseRequest {
+// Present, and checked against DEMO_WRITE_KEY, only when PUBLIC_DEMO=true.
+// Ignored otherwise - local/CI environments run open, matching the spec's
+// "local/CI open, public demo gated" design.
+interface WriteProtected {
+  write_key?: string;
+}
+
+export interface SetRequest extends BaseRequest, WriteProtected {
   op: "SET";
   key: string;
   value: string;
@@ -19,12 +26,12 @@ export interface GetRequest extends BaseRequest {
   key: string;
 }
 
-export interface DelRequest extends BaseRequest {
+export interface DelRequest extends BaseRequest, WriteProtected {
   op: "DEL";
   key: string;
 }
 
-export interface ExpireRequest extends BaseRequest {
+export interface ExpireRequest extends BaseRequest, WriteProtected {
   op: "EXPIRE";
   key: string;
   ttl_ms: number;
@@ -40,7 +47,7 @@ export interface UnsubscribeRequest extends BaseRequest {
   channel: string;
 }
 
-export interface PublishRequest extends BaseRequest {
+export interface PublishRequest extends BaseRequest, WriteProtected {
   op: "PUBLISH";
   channel: string;
   message: string;

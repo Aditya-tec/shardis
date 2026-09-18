@@ -29,6 +29,10 @@ function valueTooLarge(value: string, limit: number): boolean {
   return Buffer.byteLength(value, "utf8") > limit;
 }
 
+function writeKey(body: Record<string, unknown>): string | undefined {
+  return typeof body.write_key === "string" ? body.write_key : undefined;
+}
+
 export function parseRequest(raw: string, limits: ParseLimits): ParseResult {
   let parsed: unknown;
   try {
@@ -62,21 +66,28 @@ export function parseRequest(raw: string, limits: ParseLimits): ParseResult {
     if (valueTooLarge(body.value, limits.maxValueBytes)) return err(id, "value_too_large");
     return {
       ok: true,
-      request: { id, op, key: body.key, value: body.value, ttl_ms: body.ttl_ms as number | undefined }
+      request: {
+        id,
+        op,
+        key: body.key,
+        value: body.value,
+        ttl_ms: body.ttl_ms as number | undefined,
+        write_key: writeKey(body)
+      }
     };
   }
 
   if (op === "GET" || op === "DEL") {
     if (typeof body.key !== "string") return err(id, "missing_key");
     if (keyTooLarge(body.key, limits.maxKeyBytes)) return err(id, "key_too_large");
-    return { ok: true, request: { id, op, key: body.key } };
+    return { ok: true, request: op === "DEL" ? { id, op, key: body.key, write_key: writeKey(body) } : { id, op, key: body.key } };
   }
 
   if (op === "EXPIRE") {
     if (typeof body.key !== "string") return err(id, "missing_key");
     if (typeof body.ttl_ms !== "number" || !Number.isFinite(body.ttl_ms)) return err(id, "invalid_ttl");
     if (keyTooLarge(body.key, limits.maxKeyBytes)) return err(id, "key_too_large");
-    return { ok: true, request: { id, op, key: body.key, ttl_ms: body.ttl_ms } };
+    return { ok: true, request: { id, op, key: body.key, ttl_ms: body.ttl_ms, write_key: writeKey(body) } };
   }
 
   if (op === "SUBSCRIBE" || op === "UNSUBSCRIBE") {
@@ -90,5 +101,5 @@ export function parseRequest(raw: string, limits: ParseLimits): ParseResult {
   if (typeof body.message !== "string") return err(id, "missing_message");
   if (keyTooLarge(body.channel, limits.maxKeyBytes)) return err(id, "channel_too_large");
   if (valueTooLarge(body.message, limits.maxValueBytes)) return err(id, "message_too_large");
-  return { ok: true, request: { id, op, channel: body.channel, message: body.message } };
+  return { ok: true, request: { id, op, channel: body.channel, message: body.message, write_key: writeKey(body) } };
 }

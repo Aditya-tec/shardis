@@ -249,4 +249,65 @@ describe("app WS protocol", () => {
     const event = (await eventPromise) as Record<string, unknown>;
     expect(event).toMatchObject({ event: "write_applied", op: "SET", key: "watched" });
   });
+
+  it("PUBLIC_DEMO rejects writes without a matching write_key, but leaves GET/SUBSCRIBE open", async () => {
+    const { url: demoUrl, app: demoApp } = await startApp({ publicDemo: true, demoWriteKey: "secret123" });
+    const demoSocket = await connect(demoUrl);
+
+    demoSocket.send(JSON.stringify({ id: "1", op: "SET", key: "foo", value: "bar" }));
+    expect(await nextMessage(demoSocket)).toEqual({ id: "1", ok: false, error: "write_key_required" });
+
+    demoSocket.send(JSON.stringify({ id: "2", op: "SET", key: "foo", value: "bar", write_key: "wrong" }));
+    expect(await nextMessage(demoSocket)).toEqual({ id: "2", ok: false, error: "write_key_required" });
+
+    demoSocket.send(JSON.stringify({ id: "3", op: "SET", key: "foo", value: "bar", write_key: "secret123" }));
+    expect(await nextMessage(demoSocket)).toEqual({ id: "3", ok: true });
+
+    // GET and SUBSCRIBE stay open with no write_key at all.
+    demoSocket.send(JSON.stringify({ id: "4", op: "GET", key: "foo" }));
+    expect(await nextMessage(demoSocket)).toEqual({ id: "4", ok: true, value: "bar" });
+    demoSocket.send(JSON.stringify({ id: "5", op: "SUBSCRIBE", channel: "c" }));
+    expect(await nextMessage(demoSocket)).toEqual({ id: "5", ok: true, subscribed: true });
+
+    // PUBLISH is treated as a write and gated too.
+    demoSocket.send(JSON.stringify({ id: "6", op: "PUBLISH", channel: "c", message: "hi" }));
+    expect(await nextMessage(demoSocket)).toEqual({ id: "6", ok: false, error: "write_key_required" });
+
+    demoSocket.close();
+    demoApp.wss.close();
+    demoApp.close();
+    await new Promise<void>((resolve) => demoApp.server.close(() => resolve()));
+  });
+
+  it("without PUBLIC_DEMO, writes succeed with no write_key at all (local/CI stay open)", async () => {
+    socket.send(JSON.stringify({ id: "1", op: "SET", key: "foo", value: "bar" }));
+    expect(await nextMessage(socket)).toEqual({ id: "1", ok: true });
+  });
+
+  it("per-connection rate limiting rejects a burst over RATE_LIMIT_RPS without crashing the connection", async () => {
+    const { url: limitedUrl, app: limitedApp } = await startApp({ rateLimitRps: 3 });
+    const limitedSocket = await connect(limitedUrl);
+
+    const responses: Record<string, unknown>[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      limitedSocket.send(JSON.stringify({ id: `${i}`, op: "GET", key: "x" }));
+      responses.push((await nextMessage(limitedSocket)) as Record<string, unknown>);
+    }
+
+    const rejected = responses.filter((r) => r.error === "rate_limited");
+    const accepted = responses.filter((r) => r.ok === true);
+    expect(rejected.length).toBeGreaterThan(0);
+    expect(accepted.length).toBeGreaterThan(0);
+    expect(rejected[0]).toEqual({ id: null, ok: false, error: "rate_limited" });
+
+    // The connection survives being rate-limited and keeps working afterward.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    limitedSocket.send(JSON.stringify({ id: "after-wait", op: "GET", key: "x" }));
+    expect(await nextMessage(limitedSocket)).toEqual({ id: "after-wait", ok: true, value: null });
+
+    limitedSocket.close();
+    limitedApp.wss.close();
+    limitedApp.close();
+    await new Promise<void>((resolve) => limitedApp.server.close(() => resolve()));
+  });
 });
