@@ -22,8 +22,24 @@ export function EventFeed({ events }: { events: LiveEvent[] }) {
     return <p className="hint">Waiting for events... make a write against the cluster to see one land here.</p>;
   }
 
+  const latest = events[0];
+  const explanation = latest.event === "moved_redirect"
+    ? `This request was redirected to the current leader of ${String(latest.shard ?? "the owning shard")}.`
+    : latest.event === "replication_applied"
+      ? `A follower applied ${String(latest.op ?? "a write")} for ${String(latest.key ?? "a key")} from its leader.`
+      : latest.event === "failover_triggered" || latest.event === "leader_changed"
+        ? `Leadership changed from ${String(latest.previousLeader ?? "the old leader")} to ${String(latest.newLeader ?? "a new leader")}.`
+        : latest.event === "write_applied"
+          ? `A write was durably accepted by ${latest.nodeId} and broadcast to its followers.`
+          : `The latest cluster event was ${latest.event.replaceAll("_", " ")}.`;
+
   return (
-    <div className="event-feed">
+    <>
+      <div className="event-explainer">
+        <span className="event-explainer-label">What just happened</span>
+        <strong>{explanation}</strong>
+      </div>
+      <div className="event-feed">
       {events.map((event, i) => (
         <div className="event-row" key={`${event.nodeId}-${event.ts}-${i}`}>
           <span className="time">{formatTime(event.ts)}</span>
@@ -32,6 +48,7 @@ export function EventFeed({ events }: { events: LiveEvent[] }) {
           <span className="fields">{formatFields(event)}</span>
         </div>
       ))}
-    </div>
+      </div>
+    </>
   );
 }

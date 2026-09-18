@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { NODES } from "../lib/clusterConfig";
+import { NODES, SHARDS } from "../lib/clusterConfig";
+import { keySlot } from "../lib/keySlot";
+import type { NodeStatus } from "../lib/types";
 import { sendConsoleRequest, type ConsoleResult } from "../lib/wsRequest";
 
 const OPS = ["SET", "GET", "DEL", "EXPIRE"] as const;
@@ -28,7 +30,7 @@ function storeWriteKey(value: string): void {
   }
 }
 
-export function Console() {
+export function Console({ statuses = {} }: { statuses?: Record<string, NodeStatus> }) {
   const [nodeId, setNodeId] = useState(NODES[0]?.id ?? "");
   const [op, setOp] = useState<Op>("SET");
   const [key, setKey] = useState("");
@@ -41,6 +43,46 @@ export function Console() {
 
   const targetNode = NODES.find((n) => n.id === nodeId) ?? NODES[0];
   const isWriteOp = op !== "GET";
+
+  function routeForKey(nextKey: string) {
+    const slot = keySlot(nextKey);
+    const shard = SHARDS.find((candidate) => slot >= candidate.hashRange[0] && slot <= candidate.hashRange[1]);
+    if (!shard) return null;
+    const candidates = NODES.filter((node) => shard.nodeIds.includes(node.id));
+    const leader = candidates.find((node) => statuses[node.id]?.reachable && statuses[node.id]?.role === "leader");
+    const reachable = candidates.find((node) => statuses[node.id]?.reachable);
+    return { node: leader ?? reachable ?? candidates[0], shard: shard.id, slot };
+  }
+
+  useEffect(() => {
+    if (!key.trim()) return;
+    const route = routeForKey(key.trim());
+    if (!route || route.node.id === nodeId) return;
+    setNodeId(route.node.id);
+    setError(null);
+  }, [key, statuses]);
+
+  const routePreview = key.trim() ? routeForKey(key.trim()) : null;
+
+  function explain(result: ConsoleResult): string {
+    const r = result.response as { ok?: boolean; error?: string; value?: unknown; deleted?: boolean; updated?: boolean };
+    if (result.followedMoved) {
+      return `The node you asked didn't own this key, so the request was auto-redirected to ${result.respondedByUrl}, the leader that does.`;
+    }
+    if (r.ok === false) {
+      if (r.error === "write_key_required" || r.error === "invalid_write_key") {
+        return "Rejected: this is a protected public demo node and needs a valid write key for writes.";
+      }
+      return `Rejected: ${r.error ?? "unknown error"}.`;
+    }
+    if (result.request.op === "GET") {
+      return r.value === undefined ? "Key not found on this node." : "Read succeeded - value returned from this node's in-memory store.";
+    }
+    if (result.request.op === "DEL") {
+      return r.deleted ? "Key deleted and the change is replicating to followers." : "Nothing to delete - key didn't exist.";
+    }
+    return "Write accepted by the leader and is replicating to followers now.";
+  }
 
   // Loaded after mount, not as the initial state, so server-rendered HTML
   // (which has no access to the browser's localStorage) and the client's
@@ -71,7 +113,8 @@ export function Console() {
       if (isWriteOp && writeKey.trim()) {
         request.write_key = writeKey.trim();
       }
-      const result = await sendConsoleRequest(targetNode.wsUrl, request as never);
+      const route = routeForKey(key.trim());
+      const result = await sendConsoleRequest((route?.node ?? targetNode).wsUrl, request as never);
       setHistory((prev) => [result, ...prev].slice(0, 30));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -83,7 +126,7 @@ export function Console() {
   return (
     <div>
       <form className="console-form" onSubmit={handleSubmit}>
-        <select value={nodeId} onChange={(e) => setNodeId(e.target.value)}>
+        <select value={nodeId} onChange={(e) => setNodeId(e.target.value)} aria-label="Target node">
           {NODES.map((n) => (
             <option key={n.id} value={n.id}>
               {n.id} ({n.shard})
@@ -121,17 +164,17 @@ export function Console() {
         </button>
       </form>
 
+      {routePreview && (
+        <p className="route-note">
+          Slot {routePreview.slot} belongs to {routePreview.shard}; routing to {routePreview.node.id}.
+        </p>
+      )}
+
       {error && <p style={{ color: "var(--down)", fontSize: 12 }}>{error}</p>}
 
       <p className="hint">
-        Any command that gets a MOVED response is automatically retried once against the returned leader URL, so a
-        write sent to the wrong node still lands - as long as that leader URL is reachable from your browser. Against
-        the local Docker Compose cluster, cluster.config.local.json's URLs are the internal ws://node-a1:7000-style
-        addresses the nodes use to reach each other, not the host ports this dashboard uses, so a cross-shard MOVED
-        follow from here will fail to resolve (it surfaces as a "could not connect" error, not a hang). Pick the
-        node that already owns your key to avoid the redirect, same as with shardis-cli against this cluster.
-        Against a node running with PUBLIC_DEMO=true, writes also need the write_key field above (remembered in
-        this browser only, never sent anywhere but the node you choose above).
+        Keys are hashed to their shard and routed to a reachable leader automatically. Public-demo writes also need the
+        write_key above, remembered only in this browser.
       </p>
 
       <div className="console-history">
@@ -141,7 +184,8 @@ export function Console() {
               {result.request.op} {result.request.key} → {result.respondedByUrl}
               {result.followedMoved ? " (followed MOVED)" : ""}
             </div>
-            <div>{JSON.stringify(result.response)}</div>
+            <div className="explain">{explain(result)}</div>
+            <div className="raw">{JSON.stringify(result.response)}</div>
           </div>
         ))}
       </div>
