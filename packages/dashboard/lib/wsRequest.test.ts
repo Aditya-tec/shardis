@@ -1,7 +1,12 @@
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
+import WebSocket from "ws";
 import { WebSocketServer } from "ws";
 import { sendConsoleRequest } from "./wsRequest";
+
+// Vitest runs in Node, while the dashboard helper uses the browser's global
+// WebSocket API. Use the same ws implementation as the fake test servers.
+globalThis.WebSocket = WebSocket as unknown as typeof globalThis.WebSocket;
 
 interface FakeServer {
   wss: WebSocketServer;
