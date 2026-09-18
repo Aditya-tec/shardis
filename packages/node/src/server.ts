@@ -10,13 +10,15 @@ app.server.listen(config.port, () => {
   app.log("server_started", { role: config.role, shard: config.shardId, port });
 });
 
-function shutdown(signal: string) {
+let shuttingDown = false;
+
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
   app.log("shutdown_signal_received", { signal });
-  app.server.close(() => {
-    app.close();
-    process.exit(0);
-  });
+  await app.shutdownGracefully();
+  process.exit(0);
 }
 
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));

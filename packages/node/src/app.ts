@@ -27,6 +27,11 @@ export interface App {
   log: (event: string, fields?: Record<string, unknown>) => void;
   snapshotNow: () => void;
   close: () => void;
+  // Graceful production shutdown (SIGTERM/SIGINT): stops accepting new
+  // writes, closes client connections with a clean WS frame, then tears
+  // down timers/replication/AOF. Distinct from close(), which tests use
+  // for immediate synchronous teardown without the drain sequence.
+  shutdownGracefully: () => Promise<void>;
 }
 
 function makeLogger(nodeId: string) {
@@ -91,6 +96,8 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
 
   store.startSweep(config.ttlSweepIntervalMs);
 
+  let shuttingDown = false;
+
   const server = createServer((req, res) => {
     if (req.method === "GET" && req.url === "/healthz") {
       res.writeHead(200, { "content-type": "application/json" });
@@ -139,6 +146,12 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
         }
 
         if (isStoreRequest(result.request)) {
+          const isWriteOp = result.request.op !== "GET";
+          if (shuttingDown && isWriteOp) {
+            socket.send(JSON.stringify({ id: result.request.id, ok: false, error: "shutting_down" }));
+            return;
+          }
+
           const owningShard = ring.shardForKey(result.request.key);
           if (owningShard.id !== config.shardId) {
             log("moved_redirect", { key: result.request.key, shard: owningShard.id });
@@ -154,8 +167,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
             return;
           }
 
-          const isWrite = result.request.op !== "GET";
-          if (isWrite && !replication.isLeader()) {
+          if (isWriteOp && !replication.isLeader()) {
             log("moved_redirect", { key: result.request.key, shard: config.shardId, reason: "not_leader" });
             socket.send(
               JSON.stringify({
@@ -177,7 +189,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
           }
 
           const response = dispatch(result.request, store);
-          if (isWrite) {
+          if (isWriteOp) {
             log("write_applied", { op: result.request.op, key: result.request.key });
             if (aofEntry) replication.afterLocalWrite(aofEntry);
           }
@@ -201,6 +213,50 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
     });
   });
 
+  function closeInternal(): void {
+    clearInterval(snapshotTimer);
+    store.stopSweep();
+    replication.stop();
+    aofLog.close();
+  }
+
+  async function shutdownGracefully(): Promise<void> {
+    shuttingDown = true;
+    log("shutdown_draining", { connections: wss.clients.size });
+
+    // Stop accepting new connections. Deliberately not awaiting a close
+    // callback here: an *upgraded* WebSocket socket is detached from
+    // Node's normal HTTP keep-alive tracking, and in practice
+    // server.close()'s callback never fires while one is open - we drive
+    // completion from draining wss.clients below instead.
+    server.close();
+
+    // A brief grace tick before closing each connection: bytes a client
+    // already sent can still be sitting unparsed in the socket's read
+    // buffer, and closing immediately can abandon them before the message
+    // handler (which now correctly rejects writes via shuttingDown, but
+    // still serves reads) ever sees them. This lets already-in-flight
+    // messages get a real response instead of being silently dropped.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const CLOSE_HANDSHAKE_TIMEOUT_MS = 1000;
+    await Promise.all(
+      [...wss.clients].map(
+        (client) =>
+          new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, CLOSE_HANDSHAKE_TIMEOUT_MS);
+            client.once("close", () => {
+              clearTimeout(timer);
+              resolve();
+            });
+            client.close(1001, "server shutting down");
+          })
+      )
+    );
+
+    closeInternal();
+  }
+
   return {
     server,
     wss,
@@ -211,11 +267,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
     replication,
     log,
     snapshotNow,
-    close: () => {
-      clearInterval(snapshotTimer);
-      store.stopSweep();
-      replication.stop();
-      aofLog.close();
-    }
+    close: closeInternal,
+    shutdownGracefully
   };
 }
