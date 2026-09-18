@@ -104,8 +104,9 @@ Set `FAILOVER_MODE=raft` on every node in a shard. The opt-in controller adds:
 - leader replacement after SIGKILL without losing committed data.
 
 This is deliberately a lite implementation. `currentTerm` and `votedFor` are
-not persisted, and membership changes do not use Raft joint consensus. Those
-limitations are explicit rather than implied guarantees.
+persisted locally with the node's data, but membership changes do not use Raft
+joint consensus. That remaining limitation is explicit rather than an implied
+guarantee.
 
 ## Dynamic followers
 
@@ -121,6 +122,10 @@ NODE_URL=ws://127.0.0.1:7003/ws
 The new node sends `MEMBER_JOIN`; the recipient adds it, connects to it, and
 relays `MEMBER_ANNOUNCE` to known members. A graceful shutdown sends
 `MEMBER_LEAVE`. This changes only the follower set, never hash ownership.
+
+Shard ranges are static by design. Shardis does not currently rebalance or
+reshard live data; changing ownership requires an operator-managed topology
+change and data migration plan.
 
 ## Configuration
 
@@ -140,6 +145,7 @@ the complete set. The most important values are:
 | `DATA_DIR` | AOF and snapshot directory | `./data/<NODE_ID>` |
 | `PUBLIC_DEMO` | Enable write-key protection | `false` |
 | `DEMO_WRITE_KEY` | Required key when public demo protection is enabled | unset |
+| `MAX_CONNECTIONS_PER_IP` | Simultaneous WebSocket cap per source IP | `20` |
 
 ## HTTP endpoints
 
@@ -160,6 +166,11 @@ Local Compose is open for development. The public demo adds a shared
 `DEMO_WRITE_KEY` for mutating requests; it is a demo safeguard, not per-user
 authentication or tenant isolation. See [SECURITY.md](SECURITY.md) for the
 reporting policy and deployment boundary.
+
+This project is intentionally a small-scale demonstration. Throughput and
+latency numbers in the benchmark history describe the current local topology;
+they are not a capacity promise. There is no off-node backup service, so a
+disk failure can lose local AOF and snapshot data.
 
 ## Repository layout
 

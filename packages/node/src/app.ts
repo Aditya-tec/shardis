@@ -21,6 +21,7 @@ import { ClusterGossip } from "./gossip/clusterGossip.js";
 import { ReplicationManager } from "./replication/manager.js";
 import { TokenBucket } from "./security/rateLimit.js";
 import { writeKeyValid } from "./security/safeCompare.js";
+import { randomUUID } from "node:crypto";
 
 export interface App {
   server: Server;
@@ -111,6 +112,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
         store,
         aofLog,
         log,
+        statePath: join(config.dataDir, "raft-state.json"),
         onLeaderChanged: (leaderId) => clusterGossip.announceOwnShardLeader(config.shardId, leaderId)
       })
     : new ReplicationManager({
@@ -205,8 +207,19 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
   // broker's channel map forever - each new channel name is a new Map
   // entry, not something the existing per-message rate limit bounds.
   const MAX_SUBSCRIPTIONS_PER_CONNECTION = 100;
+  const MAX_CONNECTIONS_PER_IP = 20;
+  const connectionsByIp = new Map<string, number>();
 
   wss.on("connection", (socket: WebSocket) => {
+    const connectionIp = (socket as WebSocket & { _socket?: { remoteAddress?: string } })._socket?.remoteAddress ?? "unknown";
+    const connectionCount = connectionsByIp.get(connectionIp) ?? 0;
+    if (connectionCount >= MAX_CONNECTIONS_PER_IP) {
+      socket.close(1013, "too many connections from this address");
+      log("client_rejected", { error: "connection_limit", ip: connectionIp });
+      return;
+    }
+    connectionsByIp.set(connectionIp, connectionCount + 1);
+    const connectionId = randomUUID();
     const subscriber: Subscriber = { send: (data: string) => socket.send(data) };
     const subscribedChannels = new Set<string>();
 
@@ -319,7 +332,12 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
           const response = dispatch(result.request, store);
           opsTotal += 1;
           if (isWriteOp) {
-            log("write_applied", { op: result.request.op, key: result.request.key });
+            log("write_applied", {
+              op: result.request.op,
+              key: result.request.key,
+              connection_id: connectionId,
+              write_key_present: "write_key" in result.request && Boolean(result.request.write_key)
+            });
             if (aofEntry) replication.afterLocalWrite(aofEntry);
           }
           respond(response);
@@ -358,6 +376,9 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
     });
 
     socket.on("close", () => {
+      const remaining = (connectionsByIp.get(connectionIp) ?? 1) - 1;
+      if (remaining > 0) connectionsByIp.set(connectionIp, remaining);
+      else connectionsByIp.delete(connectionIp);
       pubsub.unsubscribeAll(subscriber);
       dashboardListeners.delete(socket);
     });

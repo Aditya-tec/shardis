@@ -14,6 +14,7 @@ export interface NodeConfig {
   heartbeatIntervalMs: number;
   heartbeatTimeoutMs: number;
   rateLimitRps: number;
+  maxConnectionsPerIp?: number;
   maxKeyBytes: number;
   maxValueBytes: number;
   publicDemo: boolean;
@@ -66,6 +67,7 @@ export function loadConfig(): NodeConfig {
     heartbeatIntervalMs: intEnv("HEARTBEAT_INTERVAL_MS", 1000),
     heartbeatTimeoutMs: intEnv("HEARTBEAT_TIMEOUT_MS", 3000),
     rateLimitRps: intEnv("RATE_LIMIT_RPS", 50),
+    maxConnectionsPerIp: intEnv("MAX_CONNECTIONS_PER_IP", 20),
     maxKeyBytes: intEnv("MAX_KEY_BYTES", 1024),
     maxValueBytes: intEnv("MAX_VALUE_BYTES", 65536),
     publicDemo: (process.env.PUBLIC_DEMO ?? "false") === "true",

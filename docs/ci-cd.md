@@ -45,6 +45,11 @@ The node uses plain `ws://` internally. TLS is expected to terminate at the
 reverse proxy or managed platform in front of it; clients should only receive
 `wss://` endpoints. Do not add a public node port without TLS termination.
 
+The node also records connection ids and write-key presence in structured
+write events, and limits simultaneous WebSocket connections per source IP.
+These are coarse demo-grade controls, not per-user authentication or a
+multi-tenant audit system.
+
 ## Release process
 
 ```bash

@@ -102,6 +102,10 @@ set `JOIN_URL` to an existing shard leader and `NODE_URL` to the new node's
 reachable WebSocket address. The new follower joins through membership relay;
 hash ownership and shard ranges do not change.
 
+Shard ranges are static by design. The project does not provide live
+resharding or off-node backups; snapshot/AOF files remain local to the node's
+data directory and should be copied manually before important demonstrations.
+
 ## Status of this deployment
 
 As of this repo's current state, `render.yaml` and

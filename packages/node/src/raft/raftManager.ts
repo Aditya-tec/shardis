@@ -5,6 +5,7 @@ import type { AofEntry } from "../persistence/aof.js";
 import type { ReplicationController } from "../replication/controller.js";
 import { RaftLog } from "./log.js";
 import { tryParseRaftMessage, type RaftMessage } from "./protocol.js";
+import { loadRaftState, persistRaftState } from "./state.js";
 
 export interface RaftManagerOptions {
   nodeId: string;
@@ -17,6 +18,7 @@ export interface RaftManagerOptions {
   log: (event: string, fields?: Record<string, unknown>) => void;
   connect?: (url: string) => WebSocket;
   onLeaderChanged?: (leaderId: string) => void;
+  statePath?: string;
 }
 
 interface Peer { node: ShardNode; socket: WebSocket | null; matchIndex: number; }
@@ -31,10 +33,11 @@ export class RaftManager implements ReplicationController {
   private readonly logEvent: RaftManagerOptions["log"];
   private readonly connectFn: (url: string) => WebSocket;
   private readonly onLeaderChanged?: (leaderId: string) => void;
+  private readonly statePath?: string;
   private readonly peerState = new Map<string, Peer>();
   private readonly log = new RaftLog();
-  private term = 0;
-  private votedFor: string | null = null;
+  private term: number;
+  private votedFor: string | null;
   private leaderId: string | null = null;
   private role: "follower" | "candidate" | "leader" = "follower";
   private votes = new Set<string>();
@@ -55,6 +58,10 @@ export class RaftManager implements ReplicationController {
     this.logEvent = options.log;
     this.connectFn = options.connect ?? ((url) => new WebSocket(url));
     this.onLeaderChanged = options.onLeaderChanged;
+    this.statePath = options.statePath;
+    const state = this.statePath ? loadRaftState(this.statePath) : { currentTerm: 0, votedFor: null };
+    this.term = state.currentTerm;
+    this.votedFor = state.votedFor;
     for (const node of this.peers) this.peerState.set(node.id, { node, socket: null, matchIndex: -1 });
   }
 
@@ -122,6 +129,7 @@ export class RaftManager implements ReplicationController {
     this.role = "candidate";
     this.term += 1;
     this.votedFor = this.nodeId;
+    this.persistState();
     this.votes = new Set([this.nodeId]);
     this.leaderId = null;
     this.resetElectionTimer();
@@ -144,7 +152,12 @@ export class RaftManager implements ReplicationController {
   }
 
   private handle(socket: WebSocket, message: RaftMessage): void {
-    if (message.term > this.term) { this.term = message.term; this.role = "follower"; this.votedFor = null; }
+    if (message.term > this.term) {
+      this.term = message.term;
+      this.role = "follower";
+      this.votedFor = null;
+      this.persistState();
+    }
     if (message.type === "RAFT_REQUEST_VOTE") return this.handleVoteRequest(socket, message);
     if (message.type === "RAFT_VOTE") return this.handleVote(message);
     if (message.type === "RAFT_APPEND_ENTRIES") return this.handleAppend(socket, message);
@@ -154,7 +167,11 @@ export class RaftManager implements ReplicationController {
   private handleVoteRequest(socket: WebSocket, message: Extract<RaftMessage, { type: "RAFT_REQUEST_VOTE" }>): void {
     const upToDate = isLogUpToDate(message.lastLogIndex, message.lastLogTerm, this.log.lastIndex, this.log.lastTerm);
     const granted = message.term === this.term && upToDate && (this.votedFor === null || this.votedFor === message.candidateId);
-    if (granted) { this.votedFor = message.candidateId; this.resetElectionTimer(); }
+    if (granted) {
+      this.votedFor = message.candidateId;
+      this.persistState();
+      this.resetElectionTimer();
+    }
     this.send(socket, { type: "RAFT_VOTE", term: this.term, voterId: this.nodeId, granted });
   }
 
@@ -207,6 +224,10 @@ export class RaftManager implements ReplicationController {
       if (entry.op === "DEL") this.store.del(entry.key);
       if (entry.op === "EXPIRE") this.store.restoreExpire(entry.key, entry.expiresAt);
     }
+  }
+
+  private persistState(): void {
+    if (this.statePath) persistRaftState(this.statePath, { currentTerm: this.term, votedFor: this.votedFor });
   }
 }
 
