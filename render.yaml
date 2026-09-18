@@ -1,0 +1,100 @@
+# Render Blueprint for the reduced 1-shard/2-node public demo topology
+# (see cluster.config.render.json). This is NOT the primary environment -
+# that's local Docker Compose (docker-compose.yml, the full 3-shard/6-node
+# cluster). This is a smaller, secondary "clickable live demo."
+#
+# Known, deliberate limitations of Render's free tier (see README):
+#   - Ephemeral filesystem: DATA_DIR is wiped on every redeploy and likely
+#     on a spin-down/wake cycle. There is no persistent disk on the free plan.
+#   - 750 shared instance-hours/workspace/month, and each free service spins
+#     down after 15 minutes idle, waking on the next request in ~1 minute.
+#     That's why this topology is 2 services, not the full 6-node cluster.
+#
+# Deploy: in the Render dashboard, "New +" -> "Blueprint", point at this
+# repo. Render finds this file automatically. After the first deploy,
+# set DEMO_WRITE_KEY (a value of your choosing) on shardis-leader in the
+# Render dashboard - it's marked `sync: false` below so Render prompts for
+# it rather than it ever being committed to the repo.
+
+services:
+  - type: web
+    name: shardis-leader
+    runtime: docker
+    dockerfilePath: ./packages/node/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ID
+        value: node-leader
+      - key: ROLE
+        value: leader
+      - key: SHARD_ID
+        value: shard-a
+      - key: CLUSTER_CONFIG_PATH
+        value: ./cluster.config.render.json
+      - key: DATA_DIR
+        value: /data
+      - key: PORT
+        value: "10000"
+      - key: MAXMEMORY_MB
+        value: "64"
+      - key: TTL_SWEEP_INTERVAL_MS
+        value: "1000"
+      - key: SNAPSHOT_INTERVAL_MS
+        value: "60000"
+      - key: HEARTBEAT_INTERVAL_MS
+        value: "1000"
+      - key: HEARTBEAT_TIMEOUT_MS
+        value: "3000"
+      - key: RATE_LIMIT_RPS
+        value: "50"
+      - key: MAX_KEY_BYTES
+        value: "1024"
+      - key: MAX_VALUE_BYTES
+        value: "65536"
+      - key: PUBLIC_DEMO
+        value: "true"
+      - key: DEMO_WRITE_KEY
+        sync: false
+
+  - type: web
+    name: shardis-follower
+    runtime: docker
+    dockerfilePath: ./packages/node/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ID
+        value: node-follower
+      - key: ROLE
+        value: follower
+      - key: SHARD_ID
+        value: shard-a
+      - key: CLUSTER_CONFIG_PATH
+        value: ./cluster.config.render.json
+      - key: DATA_DIR
+        value: /data
+      - key: PORT
+        value: "10000"
+      - key: MAXMEMORY_MB
+        value: "64"
+      - key: TTL_SWEEP_INTERVAL_MS
+        value: "1000"
+      - key: SNAPSHOT_INTERVAL_MS
+        value: "60000"
+      - key: HEARTBEAT_INTERVAL_MS
+        value: "1000"
+      - key: HEARTBEAT_TIMEOUT_MS
+        value: "3000"
+      - key: RATE_LIMIT_RPS
+        value: "50"
+      - key: MAX_KEY_BYTES
+        value: "1024"
+      - key: MAX_VALUE_BYTES
+        value: "65536"
+      - key: PUBLIC_DEMO
+        value: "true"
+      - key: DEMO_WRITE_KEY
+        sync: false

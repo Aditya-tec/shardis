@@ -1,0 +1,10 @@
+{
+  "shards": [
+    {
+      "id": "shard-a",
+      "hash_range": [0, 16383],
+      "leader": { "id": "node-leader", "url": "wss://shardis-leader.onrender.com/ws" },
+      "followers": [{ "id": "node-follower", "url": "wss://shardis-follower.onrender.com/ws" }]
+    }
+  ]
+}
