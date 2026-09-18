@@ -1,0 +1,24 @@
+{
+  "name": "@shardis/benchmarks",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Throughput, failover, rebalance, and replication-lag benchmarks. Each run appends a dated row to docs/benchmarks.md.",
+  "scripts": {
+    "bench:throughput": "tsx src/throughput.ts",
+    "bench:failover": "tsx src/failover.ts",
+    "bench:rebalance": "tsx src/rebalance.ts",
+    "bench:replication-lag": "tsx src/replication-lag.ts",
+    "bench:all": "pnpm bench:throughput && pnpm bench:failover && pnpm bench:rebalance && pnpm bench:replication-lag",
+    "lint": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
