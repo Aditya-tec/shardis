@@ -57,7 +57,12 @@ export class ClusterGossip {
       const socket = connection.socket;
       socket.removeAllListeners();
       if (socket.readyState === WebSocket.CONNECTING) {
-        socket.terminate();
+        // ws can have a short window where readyState is CONNECTING but its
+        // internal request has not been assigned yet. Its public close and
+        // terminate methods both assume that request exists.
+        socket.once("error", () => undefined);
+        const request = (socket as WebSocket & { _req?: { destroy?: () => void } })._req;
+        request?.destroy?.();
       } else if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CLOSING) {
         socket.close();
       }
