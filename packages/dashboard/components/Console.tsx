@@ -1,11 +1,32 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { NODES } from "../lib/clusterConfig";
 import { sendConsoleRequest, type ConsoleResult } from "../lib/wsRequest";
 
 const OPS = ["SET", "GET", "DEL", "EXPIRE"] as const;
 type Op = (typeof OPS)[number];
+
+const WRITE_KEY_STORAGE_KEY = "shardis-dashboard-write-key";
+
+function loadStoredWriteKey(): string {
+  try {
+    return localStorage.getItem(WRITE_KEY_STORAGE_KEY) ?? "";
+  } catch {
+    // Private browsing / blocked storage - fall back to an empty field
+    // rather than breaking the console.
+    return "";
+  }
+}
+
+function storeWriteKey(value: string): void {
+  try {
+    if (value) localStorage.setItem(WRITE_KEY_STORAGE_KEY, value);
+    else localStorage.removeItem(WRITE_KEY_STORAGE_KEY);
+  } catch {
+    // Ignore - this is a convenience, not required state.
+  }
+}
 
 export function Console() {
   const [nodeId, setNodeId] = useState(NODES[0]?.id ?? "");
@@ -13,11 +34,25 @@ export function Console() {
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
   const [ttlMs, setTtlMs] = useState("");
+  const [writeKey, setWriteKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [history, setHistory] = useState<ConsoleResult[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const targetNode = NODES.find((n) => n.id === nodeId) ?? NODES[0];
+  const isWriteOp = op !== "GET";
+
+  // Loaded after mount, not as the initial state, so server-rendered HTML
+  // (which has no access to the browser's localStorage) and the client's
+  // first paint match - avoids a hydration mismatch.
+  useEffect(() => {
+    setWriteKey(loadStoredWriteKey());
+  }, []);
+
+  function handleWriteKeyChange(next: string) {
+    setWriteKey(next);
+    storeWriteKey(next);
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -32,6 +67,9 @@ export function Console() {
       }
       if (op === "EXPIRE") {
         request.ttl_ms = Number(ttlMs || "0");
+      }
+      if (isWriteOp && writeKey.trim()) {
+        request.write_key = writeKey.trim();
       }
       const result = await sendConsoleRequest(targetNode.wsUrl, request as never);
       setHistory((prev) => [result, ...prev].slice(0, 30));
@@ -69,6 +107,15 @@ export function Console() {
             style={{ maxWidth: 140 }}
           />
         )}
+        {isWriteOp && (
+          <input
+            type="password"
+            placeholder="write_key (PUBLIC_DEMO only)"
+            value={writeKey}
+            onChange={(e) => handleWriteKeyChange(e.target.value)}
+            style={{ maxWidth: 180 }}
+          />
+        )}
         <button type="submit" disabled={busy || !key.trim()}>
           {busy ? "Sending..." : "Send"}
         </button>
@@ -83,6 +130,8 @@ export function Console() {
         addresses the nodes use to reach each other, not the host ports this dashboard uses, so a cross-shard MOVED
         follow from here will fail to resolve (it surfaces as a "could not connect" error, not a hang). Pick the
         node that already owns your key to avoid the redirect, same as with shardis-cli against this cluster.
+        Against a node running with PUBLIC_DEMO=true, writes also need the write_key field above (remembered in
+        this browser only, never sent anywhere but the node you choose above).
       </p>
 
       <div className="console-history">
