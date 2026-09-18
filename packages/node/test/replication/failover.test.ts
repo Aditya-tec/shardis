@@ -216,4 +216,87 @@ describe("replication + heartbeat-based failover (real 3-node shard)", () => {
     followerLowSocket.close();
     followerHighSocket.close();
   }, 45000);
+
+  it("a follower that was offline catches up on missed writes via full resync on reconnect", async () => {
+    const leader: NodeSpec = { id: "node-a1", port: randomPort() };
+    const follower: NodeSpec = { id: "node-a2", port: randomPort() };
+
+    dataDir = mkdtempSync(join(tmpdir(), "shardis-resync-data-"));
+    const configDir = mkdtempSync(join(tmpdir(), "shardis-resync-config-"));
+    clusterConfigPath = join(configDir, "cluster.json");
+    writeFileSync(
+      clusterConfigPath,
+      JSON.stringify({
+        shards: [
+          {
+            id: "shard-a",
+            hash_range: [0, 16383],
+            leader: { id: leader.id, url: nodeUrl(leader.port) },
+            followers: [{ id: follower.id, url: nodeUrl(follower.port) }]
+          }
+        ]
+      })
+    );
+
+    children = [spawnNode(leader, clusterConfigPath, dataDir), spawnNode(follower, clusterConfigPath, dataDir)];
+
+    const leaderSocket = await connectWithRetry(nodeUrl(leader.port));
+    const followerSocketFirst = await connectWithRetry(nodeUrl(follower.port));
+
+    // Establish the mesh and confirm live replication works before taking
+    // the follower down.
+    expect(await send(leaderSocket, { id: "1", op: "SET", key: "before", value: "v1" })).toEqual({
+      id: "1",
+      ok: true
+    });
+    await waitUntil(
+      async () => ((await send(followerSocketFirst, { id: "c1", op: "GET", key: "before" })).value === "v1" ? true : null),
+      5000,
+      "initial replication to reach the follower"
+    );
+    followerSocketFirst.close();
+
+    // Kill the follower (not the leader) and keep writing while it's down.
+    const followerProcess = children[1];
+    children = [children[0]];
+    followerProcess.kill("SIGKILL");
+    await new Promise<void>((resolve) => followerProcess.once("exit", () => resolve()));
+
+    const missedKeys = ["missed-1", "missed-2", "missed-3"];
+    for (const key of missedKeys) {
+      expect(await send(leaderSocket, { id: key, op: "SET", key, value: `${key}-value` })).toEqual({
+        id: key,
+        ok: true
+      });
+    }
+
+    // Restart the follower against the same data dir - its own local AOF/
+    // snapshot only has "before", not the writes made while it was down.
+    const restartedFollower = spawnNode(follower, clusterConfigPath, dataDir);
+    children = [children[0], restartedFollower];
+    const followerSocketSecond = await connectWithRetry(nodeUrl(follower.port));
+
+    for (const key of missedKeys) {
+      const value = await waitUntil(
+        async () => {
+          const response = await send(followerSocketSecond, { id: `check-${key}`, op: "GET", key });
+          return response.value === `${key}-value` ? response.value : null;
+        },
+        5000,
+        `full resync to deliver ${key} to the rejoined follower`
+      );
+      expect(value).toBe(`${key}-value`);
+    }
+
+    // And "before" (from prior to the outage) must still be there too - a
+    // full resync replaces state wholesale, it must not have dropped it.
+    expect(await send(followerSocketSecond, { id: "check-before", op: "GET", key: "before" })).toEqual({
+      id: "check-before",
+      ok: true,
+      value: "v1"
+    });
+
+    leaderSocket.close();
+    followerSocketSecond.close();
+  }, 30000);
 });

@@ -21,4 +21,6 @@ COPY --from=build /app/packages/node/package.json ./packages/node/package.json
 COPY cluster.config.local.json cluster.config.render.json* ./
 
 EXPOSE 7000
+HEALTHCHECK --interval=5s --timeout=3s --retries=5 --start-period=5s \
+  CMD ["node", "-e", "fetch('http://localhost:7000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
 CMD ["node", "packages/node/dist/server.js"]

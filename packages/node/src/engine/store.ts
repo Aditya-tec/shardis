@@ -108,6 +108,14 @@ export class Store {
     return out;
   }
 
+  // Discards every entry (and resets byte accounting). Used when a follower
+  // receives a full resync from its leader and must replace its state
+  // wholesale, not merge with whatever it had before.
+  clear(): void {
+    this.data.clear();
+    this.approxBytes = 0;
+  }
+
   private isExpired(entry: StoreEntry): boolean {
     return entry.expiresAt !== null && entry.expiresAt <= this.now();
   }

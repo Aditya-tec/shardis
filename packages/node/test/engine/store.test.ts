@@ -184,6 +184,21 @@ describe("Store", () => {
     expect(store.size).toBe(2);
   });
 
+  it("clear() removes every entry and resets byte accounting for future eviction math", () => {
+    const store = new Store({ maxmemoryBytes: 100 });
+    store.set("a", "1");
+    store.set("b", "2");
+    store.clear();
+
+    expect(store.size).toBe(0);
+    expect(store.get("a")).toBeUndefined();
+
+    // If byte accounting weren't reset, this write could wrongly appear
+    // over cap and trigger a spurious eviction.
+    store.set("c", "3");
+    expect(store.evictions).toBe(0);
+  });
+
   describe("LRU eviction under maxmemoryBytes", () => {
     // Each key/value below is deliberately sized so every entry is exactly
     // 10 bytes ("k0"+"0".repeat(8) etc.), making byte-cap math exact.

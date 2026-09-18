@@ -80,7 +80,8 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
     heartbeatTimeoutMs: config.heartbeatTimeoutMs,
     store,
     aofLog,
-    log
+    log,
+    onFullSyncApplied: () => snapshotNow()
   });
   replication.start();
 

@@ -1,0 +1,122 @@
+x-node-common: &node-common
+  build:
+    context: .
+    dockerfile: packages/node/Dockerfile
+  image: shardis-node:local
+  environment: &node-common-env
+    CLUSTER_CONFIG_PATH: /app/cluster.config.local.json
+    PORT: "7000"
+    DATA_DIR: /data
+    MAXMEMORY_MB: "64"
+    TTL_SWEEP_INTERVAL_MS: "1000"
+    SNAPSHOT_INTERVAL_MS: "60000"
+    HEARTBEAT_INTERVAL_MS: "1000"
+    HEARTBEAT_TIMEOUT_MS: "3000"
+    RATE_LIMIT_RPS: "50"
+    MAX_KEY_BYTES: "1024"
+    MAX_VALUE_BYTES: "65536"
+    PUBLIC_DEMO: "false"
+  networks:
+    - shardis-net
+  # HEALTHCHECK is declared once, in packages/node/Dockerfile, and applies here too.
+  restart: unless-stopped
+
+services:
+  node-a1:
+    <<: *node-common
+    container_name: node-a1
+    environment:
+      <<: *node-common-env
+      NODE_ID: node-a1
+      ROLE: leader
+      SHARD_ID: shard-a
+    ports:
+      - "7001:7000"
+    volumes:
+      - node-a1-data:/data
+
+  node-a2:
+    <<: *node-common
+    container_name: node-a2
+    environment:
+      <<: *node-common-env
+      NODE_ID: node-a2
+      ROLE: follower
+      SHARD_ID: shard-a
+    ports:
+      - "7002:7000"
+    volumes:
+      - node-a2-data:/data
+    depends_on:
+      node-a1:
+        condition: service_healthy
+
+  node-b1:
+    <<: *node-common
+    container_name: node-b1
+    environment:
+      <<: *node-common-env
+      NODE_ID: node-b1
+      ROLE: leader
+      SHARD_ID: shard-b
+    ports:
+      - "7003:7000"
+    volumes:
+      - node-b1-data:/data
+
+  node-b2:
+    <<: *node-common
+    container_name: node-b2
+    environment:
+      <<: *node-common-env
+      NODE_ID: node-b2
+      ROLE: follower
+      SHARD_ID: shard-b
+    ports:
+      - "7004:7000"
+    volumes:
+      - node-b2-data:/data
+    depends_on:
+      node-b1:
+        condition: service_healthy
+
+  node-c1:
+    <<: *node-common
+    container_name: node-c1
+    environment:
+      <<: *node-common-env
+      NODE_ID: node-c1
+      ROLE: leader
+      SHARD_ID: shard-c
+    ports:
+      - "7005:7000"
+    volumes:
+      - node-c1-data:/data
+
+  node-c2:
+    <<: *node-common
+    container_name: node-c2
+    environment:
+      <<: *node-common-env
+      NODE_ID: node-c2
+      ROLE: follower
+      SHARD_ID: shard-c
+    ports:
+      - "7006:7000"
+    volumes:
+      - node-c2-data:/data
+    depends_on:
+      node-c1:
+        condition: service_healthy
+
+networks:
+  shardis-net:
+    driver: bridge
+
+volumes:
+  node-a1-data:
+  node-a2-data:
+  node-b1-data:
+  node-b2-data:
+  node-c1-data:
+  node-c2-data:

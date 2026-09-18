@@ -17,6 +17,10 @@ export interface ReplicationManagerOptions {
   log: (event: string, fields?: Record<string, unknown>) => void;
   now?: () => number;
   connect?: (url: string) => WebSocket;
+  // Called after a follower applies a full resync from its leader, so the
+  // caller can persist it as a fresh snapshot baseline (reusing app.ts's
+  // existing snapshotNow, which also truncates the AOF).
+  onFullSyncApplied?: () => void;
 }
 
 interface PeerConnState {
@@ -37,6 +41,7 @@ export class ReplicationManager {
   private readonly log: ReplicationManagerOptions["log"];
   private readonly now: () => number;
   private readonly connectFn: (url: string) => WebSocket;
+  private readonly onFullSyncApplied?: () => void;
 
   private currentLeaderId: string;
   private lastSeenFromLeaderAt: number;
@@ -60,6 +65,7 @@ export class ReplicationManager {
     this.log = options.log;
     this.now = options.now ?? Date.now;
     this.connectFn = options.connect ?? ((url) => new WebSocket(url));
+    this.onFullSyncApplied = options.onFullSyncApplied;
     this.currentLeaderId = options.initialLeaderId;
     this.lastSeenFromLeaderAt = this.now();
   }
@@ -175,6 +181,7 @@ export class ReplicationManager {
 
     socket.on("open", () => {
       socket.send(JSON.stringify({ type: "PEER_HELLO", nodeId: this.nodeId, shardId: this.shardId }));
+      if (peer.id === this.currentLeaderId) this.requestSyncFrom(peer.id);
     });
 
     socket.on("message", (data) => {
@@ -204,6 +211,14 @@ export class ReplicationManager {
 
     this.connections.set(nodeId, { socket, url: existing?.url ?? "", lastHeartbeatAt: this.now(), outbound: false });
     socket.send(JSON.stringify({ type: "PEER_HELLO", nodeId: this.nodeId, shardId: this.shardId }));
+    if (nodeId === this.currentLeaderId) this.requestSyncFrom(nodeId);
+  }
+
+  private requestSyncFrom(peerId: string): void {
+    const conn = this.connections.get(peerId);
+    if (conn?.socket?.readyState === WebSocket.OPEN) {
+      conn.socket.send(JSON.stringify({ type: "SYNC_REQUEST", nodeId: this.nodeId }));
+    }
   }
 
   private handlePeerMessage(fromSocket: WebSocket, message: PeerMessage): void {
@@ -226,7 +241,28 @@ export class ReplicationManager {
       case "REPL_ACK":
         this.log("replication_ack", { from: message.nodeId, seq: message.seq });
         return;
+      case "SYNC_REQUEST":
+        if (this.isLeader()) {
+          fromSocket.send(JSON.stringify({ type: "SYNC_RESPONSE", entries: this.store.dump() }));
+          this.log("full_sync_sent", { to: message.nodeId, keys: this.store.size });
+        }
+        return;
+      case "SYNC_RESPONSE":
+        this.applyFullSync(message.entries);
+        return;
     }
+  }
+
+  // Applied when this node (re)connects to its leader: replaces local state
+  // wholesale rather than merging, so writes made elsewhere while this node
+  // was offline (or brand new) are picked up instead of silently missing -
+  // ongoing REPL_OPs alone only cover writes made *after* a connection is
+  // live, not whatever already happened before it.
+  private applyFullSync(entries: Array<{ key: string; value: string; expiresAt: number | null }>): void {
+    this.store.clear();
+    for (const entry of entries) this.store.restoreSet(entry.key, entry.value, entry.expiresAt);
+    this.onFullSyncApplied?.();
+    this.log("full_sync_applied", { keys: entries.length });
   }
 
   private applyReplOp(message: Extract<PeerMessage, { type: "REPL_OP" }>): void {
@@ -280,6 +316,8 @@ export class ReplicationManager {
     this.lastSeenFromLeaderAt = this.now();
     this.lastAppliedLeaderId = null;
     this.log("leader_changed", { previousLeader: previous, newLeader: claimedLeaderId, reason: "peer_claim" });
+
+    if (claimedLeaderId !== this.nodeId) this.requestSyncFrom(claimedLeaderId);
   }
 
   private sendHeartbeats(): void {
