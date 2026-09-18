@@ -5,6 +5,8 @@ export interface NodeConfig {
   clusterConfigPath: string;
   dataDir: string;
   port: number;
+  nodeUrl?: string;
+  joinUrl?: string;
   maxmemoryMb: number;
   ttlSweepIntervalMs: number;
   snapshotIntervalMs: number;
@@ -50,6 +52,8 @@ export function loadConfig(): NodeConfig {
     clusterConfigPath: requireEnv("CLUSTER_CONFIG_PATH", "./cluster.config.local.json"),
     dataDir: requireEnv("DATA_DIR", `./data/${nodeId}`),
     port: intEnv("PORT", 7000),
+    nodeUrl: process.env.NODE_URL ?? `ws://127.0.0.1:${intEnv("PORT", 7000)}/ws`,
+    joinUrl: process.env.JOIN_URL,
     maxmemoryMb: intEnv("MAXMEMORY_MB", 64),
     ttlSweepIntervalMs: intEnv("TTL_SWEEP_INTERVAL_MS", 1000),
     snapshotIntervalMs: intEnv("SNAPSHOT_INTERVAL_MS", 60000),

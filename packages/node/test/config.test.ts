@@ -8,6 +8,8 @@ const ENV_KEYS = [
   "CLUSTER_CONFIG_PATH",
   "DATA_DIR",
   "PORT",
+  "NODE_URL",
+  "JOIN_URL",
   "MAXMEMORY_MB",
   "PUBLIC_DEMO",
   "DEMO_WRITE_KEY"
@@ -34,6 +36,7 @@ describe("loadConfig", () => {
     expect(config.role).toBe("leader");
     expect(config.shardId).toBe("shard-a");
     expect(config.port).toBe(7000);
+    expect(config.joinUrl).toBeUndefined();
     expect(config.publicDemo).toBe(false);
     expect(config.dataDir).toBe("./data/node-a1");
   });

@@ -22,6 +22,8 @@ export interface ReplicationManagerOptions {
   // existing snapshotNow, which also truncates the AOF).
   onFullSyncApplied?: () => void;
   onLeaderChanged?: (leaderId: string) => void;
+  nodeUrl?: string;
+  joinUrl?: string;
 }
 
 interface PeerConnState {
@@ -44,6 +46,8 @@ export class ReplicationManager {
   private readonly connectFn: (url: string) => WebSocket;
   private readonly onFullSyncApplied?: () => void;
   private readonly onLeaderChanged?: (leaderId: string) => void;
+  private readonly nodeUrl?: string;
+  private readonly joinUrl?: string;
 
   private currentLeaderId: string;
   private lastSeenFromLeaderAt: number;
@@ -70,6 +74,8 @@ export class ReplicationManager {
     this.connectFn = options.connect ?? ((url) => new WebSocket(url));
     this.onFullSyncApplied = options.onFullSyncApplied;
     this.onLeaderChanged = options.onLeaderChanged;
+    this.nodeUrl = options.nodeUrl;
+    this.joinUrl = options.joinUrl;
     this.currentLeaderId = options.initialLeaderId;
     this.lastSeenFromLeaderAt = this.now();
   }
@@ -109,6 +115,7 @@ export class ReplicationManager {
     for (const peer of this.peers) {
       if (this.nodeId < peer.id) this.connectToPeer(peer);
     }
+    if (this.joinUrl && this.nodeUrl) this.sendMemberJoin();
 
     this.heartbeatTimer = setInterval(() => this.sendHeartbeats(), this.heartbeatIntervalMs);
     this.heartbeatTimer.unref?.();
@@ -118,6 +125,7 @@ export class ReplicationManager {
   }
 
   stop(): void {
+    this.broadcastMembership({ type: "MEMBER_LEAVE", nodeId: this.nodeId, shardId: this.shardId });
     this.stopped = true;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.failoverTimer) clearInterval(this.failoverTimer);
@@ -126,6 +134,25 @@ export class ReplicationManager {
       conn.socket?.close();
     }
     this.connections.clear();
+  }
+
+  addPeer(peer: ShardNode): void {
+    if (peer.id === this.nodeId) return;
+    const existing = this.peers.find((candidate) => candidate.id === peer.id);
+    if (existing) {
+      existing.url = peer.url;
+    } else {
+      this.peers.push(peer);
+    }
+    if (this.nodeId < peer.id && !this.connections.has(peer.id)) this.connectToPeer(peer);
+  }
+
+  removePeer(nodeId: string): void {
+    const index = this.peers.findIndex((peer) => peer.id === nodeId);
+    if (index >= 0) this.peers.splice(index, 1);
+    const connection = this.connections.get(nodeId);
+    connection?.socket?.close();
+    this.connections.delete(nodeId);
   }
 
   // Called by app.ts for every raw message on an accepted (inbound) socket,
@@ -228,6 +255,15 @@ export class ReplicationManager {
     if (nodeId === this.currentLeaderId) this.requestSyncFrom(nodeId);
   }
 
+  private sendMemberJoin(): void {
+    const socket = this.connectFn(this.joinUrl!);
+    socket.on("open", () => {
+      socket.send(JSON.stringify({ type: "MEMBER_JOIN", nodeId: this.nodeId, shardId: this.shardId, url: this.nodeUrl }));
+      setTimeout(() => socket.close(), 100);
+    });
+    socket.on("error", () => socket.close());
+  }
+
   private requestSyncFrom(peerId: string): void {
     const conn = this.connections.get(peerId);
     if (conn?.socket?.readyState === WebSocket.OPEN) {
@@ -239,6 +275,22 @@ export class ReplicationManager {
     switch (message.type) {
       case "PEER_HELLO":
         this.registerInboundPeer(message.nodeId, message.shardId, fromSocket);
+        return;
+      case "MEMBER_JOIN":
+        if (message.shardId !== this.shardId || message.nodeId === this.nodeId) return;
+        this.addPeer({ id: message.nodeId, url: message.url });
+        this.relayMembership(fromSocket, { type: "MEMBER_ANNOUNCE", nodeId: message.nodeId, shardId: message.shardId, url: message.url });
+        fromSocket.send(JSON.stringify({ type: "MEMBER_ANNOUNCE", nodeId: this.nodeId, shardId: this.shardId, url: this.nodeUrl ?? "" }));
+        return;
+      case "MEMBER_ANNOUNCE":
+        if (message.shardId !== this.shardId || message.nodeId === this.nodeId) return;
+        this.addPeer({ id: message.nodeId, url: message.url });
+        this.relayMembership(fromSocket, message);
+        return;
+      case "MEMBER_LEAVE":
+        if (message.shardId !== this.shardId) return;
+        this.removePeer(message.nodeId);
+        this.relayMembership(fromSocket, message);
         return;
       case "HEARTBEAT":
         this.noteLiveness(message.nodeId);
@@ -264,6 +316,34 @@ export class ReplicationManager {
       case "SYNC_RESPONSE":
         this.applyFullSync(message.entries);
         return;
+    }
+  }
+
+  private relayMembership(fromSocket: WebSocket, message: Extract<PeerMessage, { type: "MEMBER_ANNOUNCE" | "MEMBER_LEAVE" }>): void {
+    const payload = JSON.stringify(message);
+    for (const connection of this.connections.values()) {
+      const socket = connection.socket;
+      if (socket && socket !== fromSocket && socket.readyState === WebSocket.OPEN) {
+        try {
+          socket.send(payload);
+        } catch {
+          // Ignore disconnected peers.
+        }
+      }
+    }
+  }
+
+  private broadcastMembership(message: Extract<PeerMessage, { type: "MEMBER_ANNOUNCE" | "MEMBER_LEAVE" }>): void {
+    const payload = JSON.stringify(message);
+    for (const connection of this.connections.values()) {
+      const socket = connection.socket;
+      if (socket?.readyState === WebSocket.OPEN) {
+        try {
+          socket.send(payload);
+        } catch {
+          // Ignore disconnected peers during shutdown.
+        }
+      }
     }
   }
 

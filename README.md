@@ -103,9 +103,10 @@ Named here on purpose, not hidden:
   a coordinator. This is real, tested, working failover — it is not
   consensus, and a network partition could theoretically produce a brief
   split-brain window a real Raft/Paxos implementation would prevent.
-- **Static topology, not gossip.** `cluster.config.*.json` is read once at
-  boot. Adding or removing a node means editing that file and redeploying,
-  not a dynamic membership protocol.
+- **Static shard ownership, dynamic followers.** `cluster.config.*.json` is
+  still read once at boot for shard ranges and the initial leader/follower
+  set, but a new follower can join a running shard with `JOIN_URL`; members
+  relay the addition and graceful departure without changing hash ownership.
 - **Hash-range partitioning, not virtual-node consistent hashing.** Each
   shard owns a fixed, contiguous block of the 16384 hash slots (exactly
   Redis Cluster's own scheme). This is simpler than a virtual-node ring,

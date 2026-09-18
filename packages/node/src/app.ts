@@ -108,6 +108,8 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
     heartbeatTimeoutMs: config.heartbeatTimeoutMs,
     store,
     aofLog,
+    nodeUrl: config.nodeUrl ?? `ws://127.0.0.1:${config.port}/ws`,
+    joinUrl: config.joinUrl,
     log,
     onFullSyncApplied: () => snapshotNow(),
     onLeaderChanged: (leaderId) => clusterGossip.announceOwnShardLeader(config.shardId, leaderId)

@@ -22,6 +22,17 @@ describe("tryParsePeerMessage", () => {
       leaderId: "n1",
       seq: 1
     });
+    expect(tryParsePeerMessage(JSON.stringify({ type: "MEMBER_JOIN", nodeId: "n3", shardId: "shard-a", url: "ws://n3/ws" }))).toEqual({
+      type: "MEMBER_JOIN",
+      nodeId: "n3",
+      shardId: "shard-a",
+      url: "ws://n3/ws"
+    });
+    expect(tryParsePeerMessage(JSON.stringify({ type: "MEMBER_LEAVE", nodeId: "n3", shardId: "shard-a" }))).toEqual({
+      type: "MEMBER_LEAVE",
+      nodeId: "n3",
+      shardId: "shard-a"
+    });
   });
 
   it("returns null for a client request (has 'op'/'id', no 'type')", () => {

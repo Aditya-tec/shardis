@@ -6,6 +6,9 @@ export interface SyncEntry {
 
 export type PeerMessage =
   | { type: "PEER_HELLO"; nodeId: string; shardId: string }
+  | { type: "MEMBER_JOIN"; nodeId: string; shardId: string; url: string }
+  | { type: "MEMBER_ANNOUNCE"; nodeId: string; shardId: string; url: string }
+  | { type: "MEMBER_LEAVE"; nodeId: string; shardId: string }
   | { type: "HEARTBEAT"; nodeId: string; leaderId: string }
   | {
       type: "REPL_OP";
@@ -23,6 +26,9 @@ export type PeerMessage =
 
 const PEER_MESSAGE_TYPES = new Set([
   "PEER_HELLO",
+  "MEMBER_JOIN",
+  "MEMBER_ANNOUNCE",
+  "MEMBER_LEAVE",
   "HEARTBEAT",
   "REPL_OP",
   "REPL_ACK",
