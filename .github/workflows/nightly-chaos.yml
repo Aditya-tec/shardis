@@ -1,0 +1,69 @@
+name: Nightly Chaos
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-chaos
+  cancel-in-progress: false
+
+jobs:
+  deterministic-failover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Start the full cluster
+        run: docker compose up -d --build
+
+      - name: Wait for shard-a nodes
+        run: |
+          for port in 7001 7002; do
+            timeout 90 bash -c "until curl -sf http://localhost:$port/healthz | grep -q '\"status\":\"ok\"'; do sleep 2; done"
+          done
+
+      - name: Confirm replication before failure
+        run: |
+          pnpm --filter @shardis/node build
+          pnpm --filter @shardis/cli build
+          pnpm --filter @shardis/cli start -- --url ws://localhost:7001/ws SET ci-smoke-2 before-failure
+
+      - name: Kill shard-a leader
+        run: docker compose kill -s SIGKILL node-a1
+
+      - name: Assert follower promotion and post-failover write
+        run: |
+          timeout 90 bash -c 'until [ "$(curl -sf http://localhost:7002/healthz | jq -r .role)" = leader ]; do sleep 2; done'
+          pnpm --filter @shardis/cli start -- --url ws://localhost:7002/ws SET ci-smoke-2 after-failure
+          output=$(pnpm --filter @shardis/cli start -- --url ws://localhost:7002/ws GET ci-smoke-2)
+          echo "$output"
+          echo "$output" | grep -q 'after-failure'
+
+      - name: Restart the failed node and verify recovery
+        run: |
+          docker compose up -d node-a1
+          timeout 90 bash -c "until curl -sf http://localhost:7001/healthz | grep -q '\"status\":\"ok\"'; do sleep 2; done"
+
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

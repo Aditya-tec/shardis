@@ -78,11 +78,21 @@ there's no dynamic service-discovery in this v1 design; see
    local Docker Compose topology (`localhost:7001-7006`), which won't
    resolve from a deployed Vercel app — so this step isn't optional for
    the hosted dashboard.
-5. The dashboard's own console write form still needs the write key
-   when `PUBLIC_DEMO=true` — there's no UI field for it yet (a known
-   gap; see the "what you'd add with more time" section of the README).
-   Use `shardis-cli` for authenticated writes against the demo; the
-   dashboard is read/observe-focused for the public deployment.
+5. The dashboard console exposes a persisted `write_key` field for
+   `SET`/`DEL`/`EXPIRE`/`PUBLISH`. Enter the same value configured as
+   `DEMO_WRITE_KEY` when `PUBLIC_DEMO=true`.
+
+## Advanced node modes
+
+The public Render topology remains deterministic by default. For a self-hosted
+deployment, set `FAILOVER_MODE=raft` on every node in a shard to use the
+opt-in Raft-lite controller. It provides term-based elections and majority
+commit tracking, but deliberately does not persist `currentTerm`/`votedFor`.
+
+Dynamic follower membership is supported outside the fixed Render topology:
+set `JOIN_URL` to an existing shard leader and `NODE_URL` to the new node's
+reachable WebSocket address. The new follower joins through membership relay;
+hash ownership and shard ranges do not change.
 
 ## Status of this deployment
 
