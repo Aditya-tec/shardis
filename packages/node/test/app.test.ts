@@ -279,6 +279,55 @@ describe("app WS protocol", () => {
     await new Promise<void>((resolve) => demoApp.server.close(() => resolve()));
   });
 
+  it("PUBLIC_DEMO with no DEMO_WRITE_KEY configured fails closed (rejects every write, not just none required)", async () => {
+    const { url: demoUrl, app: demoApp } = await startApp({ publicDemo: true, demoWriteKey: undefined });
+    const demoSocket = await connect(demoUrl);
+
+    demoSocket.send(JSON.stringify({ id: "1", op: "SET", key: "foo", value: "bar" }));
+    expect(await nextMessage(demoSocket)).toEqual({ id: "1", ok: false, error: "write_key_required" });
+
+    // Even an empty-string write_key must not accidentally satisfy an
+    // undefined expected key.
+    demoSocket.send(JSON.stringify({ id: "2", op: "SET", key: "foo", value: "bar", write_key: "" }));
+    expect(await nextMessage(demoSocket)).toEqual({ id: "2", ok: false, error: "write_key_required" });
+
+    demoSocket.close();
+    demoApp.wss.close();
+    demoApp.close();
+    await new Promise<void>((resolve) => demoApp.server.close(() => resolve()));
+  });
+
+  it("caps the number of distinct channels a single connection can SUBSCRIBE to", async () => {
+    // A high rateLimitRps here so this test isolates the subscription cap
+    // from the (separately tested) per-connection rate limit.
+    const { url: capUrl, app: capApp } = await startApp({ rateLimitRps: 1000 });
+    const capSocket = await connect(capUrl);
+
+    for (let i = 0; i < 100; i += 1) {
+      capSocket.send(JSON.stringify({ id: `${i}`, op: "SUBSCRIBE", channel: `channel-${i}` }));
+      expect(await nextMessage(capSocket)).toEqual({ id: `${i}`, ok: true, subscribed: true });
+    }
+
+    capSocket.send(JSON.stringify({ id: "over", op: "SUBSCRIBE", channel: "channel-100" }));
+    expect(await nextMessage(capSocket)).toEqual({ id: "over", ok: false, error: "too_many_subscriptions" });
+
+    // Re-subscribing to an already-subscribed channel isn't a *new*
+    // subscription, so it must not be blocked by the cap.
+    capSocket.send(JSON.stringify({ id: "resub", op: "SUBSCRIBE", channel: "channel-0" }));
+    expect(await nextMessage(capSocket)).toEqual({ id: "resub", ok: true, subscribed: true });
+
+    // Freeing a slot via UNSUBSCRIBE allows a new channel again.
+    capSocket.send(JSON.stringify({ id: "un", op: "UNSUBSCRIBE", channel: "channel-1" }));
+    await nextMessage(capSocket);
+    capSocket.send(JSON.stringify({ id: "new", op: "SUBSCRIBE", channel: "channel-101" }));
+    expect(await nextMessage(capSocket)).toEqual({ id: "new", ok: true, subscribed: true });
+
+    capSocket.close();
+    capApp.wss.close();
+    capApp.close();
+    await new Promise<void>((resolve) => capApp.server.close(() => resolve()));
+  }, 15000);
+
   it("without PUBLIC_DEMO, writes succeed with no write_key at all (local/CI stay open)", async () => {
     socket.send(JSON.stringify({ id: "1", op: "SET", key: "foo", value: "bar" }));
     expect(await nextMessage(socket)).toEqual({ id: "1", ok: true });

@@ -12,3 +12,4 @@ data/
 .turbo/
 .next/
 out/
+*.tsbuildinfo

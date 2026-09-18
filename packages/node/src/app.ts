@@ -16,6 +16,7 @@ import { PubSubBroker, type Subscriber } from "./pubsub/broker.js";
 import { dispatchPubSub } from "./pubsub/dispatch.js";
 import { ReplicationManager } from "./replication/manager.js";
 import { TokenBucket } from "./security/rateLimit.js";
+import { writeKeyValid } from "./security/safeCompare.js";
 
 export interface App {
   server: Server;
@@ -170,8 +171,17 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
     maxPayload: config.maxKeyBytes + config.maxValueBytes + 4096
   });
 
+  // Not an env-configurable value (unlike RATE_LIMIT_RPS): this bounds a
+  // single connection's own footprint in the broker, not cluster-wide
+  // traffic, so a fixed sane ceiling is enough. Without it, a client could
+  // SUBSCRIBE to unboundedly many distinct channel names and grow the
+  // broker's channel map forever - each new channel name is a new Map
+  // entry, not something the existing per-message rate limit bounds.
+  const MAX_SUBSCRIPTIONS_PER_CONNECTION = 100;
+
   wss.on("connection", (socket: WebSocket) => {
     const subscriber: Subscriber = { send: (data: string) => socket.send(data) };
+    const subscribedChannels = new Set<string>();
 
     const rateLimiter = new TokenBucket(config.rateLimitRps, config.rateLimitRps);
 
@@ -221,7 +231,11 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
             return;
           }
 
-          if (config.publicDemo && result.request.op !== "GET" && result.request.write_key !== config.demoWriteKey) {
+          if (
+            config.publicDemo &&
+            result.request.op !== "GET" &&
+            !writeKeyValid(result.request.write_key, config.demoWriteKey)
+          ) {
             log("client_rejected", { error: "write_key_required", op: result.request.op });
             socket.send(JSON.stringify({ id: result.request.id, ok: false, error: "write_key_required" }));
             return;
@@ -273,13 +287,29 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
           return;
         }
 
-        if (config.publicDemo && result.request.op === "PUBLISH" && result.request.write_key !== config.demoWriteKey) {
+        if (
+          config.publicDemo &&
+          result.request.op === "PUBLISH" &&
+          !writeKeyValid(result.request.write_key, config.demoWriteKey)
+        ) {
           log("client_rejected", { error: "write_key_required", op: result.request.op });
           socket.send(JSON.stringify({ id: result.request.id, ok: false, error: "write_key_required" }));
           return;
         }
 
+        if (
+          result.request.op === "SUBSCRIBE" &&
+          !subscribedChannels.has(result.request.channel) &&
+          subscribedChannels.size >= MAX_SUBSCRIPTIONS_PER_CONNECTION
+        ) {
+          log("client_rejected", { error: "too_many_subscriptions" });
+          socket.send(JSON.stringify({ id: result.request.id, ok: false, error: "too_many_subscriptions" }));
+          return;
+        }
+
         const response = dispatchPubSub(result.request, pubsub, subscriber);
+        if (result.request.op === "SUBSCRIBE") subscribedChannels.add(result.request.channel);
+        if (result.request.op === "UNSUBSCRIBE") subscribedChannels.delete(result.request.channel);
         log("pubsub_event", { op: result.request.op, channel: result.request.channel });
         socket.send(JSON.stringify(response));
       } catch (error) {

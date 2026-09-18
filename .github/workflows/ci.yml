@@ -23,6 +23,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Fails the build on any known moderate-or-worse vulnerability in the
+      # full dependency tree (root package.json's pnpm.overrides is how
+      # transitive ones like postcss get pinned to a patched version).
+      - name: Audit dependencies
+        run: pnpm audit --audit-level moderate
+
       - name: Build node package
         run: pnpm --filter @shardis/node build
 
@@ -39,5 +45,8 @@ jobs:
           pnpm --filter @shardis/benchmarks lint
           pnpm --filter @shardis/benchmarks test
 
-      - name: Build dashboard
-        run: pnpm --filter @shardis/dashboard build
+      - name: Test and build dashboard
+        run: |
+          pnpm --filter @shardis/dashboard lint
+          pnpm --filter @shardis/dashboard test
+          pnpm --filter @shardis/dashboard build

@@ -3,7 +3,7 @@ import type { NodeDescriptor, ShardDescriptor } from "./types";
 // Matches docker-compose.yml + cluster.config.local.json: the browser runs
 // outside the Docker network, so these are the host-exposed ports, not the
 // internal service-name URLs the nodes use to talk to each other.
-const DEFAULT_NODES: NodeDescriptor[] = [
+export const DEFAULT_NODES: NodeDescriptor[] = [
   { id: "node-a1", shard: "shard-a", httpUrl: "http://localhost:7001", wsUrl: "ws://localhost:7001/ws" },
   { id: "node-a2", shard: "shard-a", httpUrl: "http://localhost:7002", wsUrl: "ws://localhost:7002/ws" },
   { id: "node-b1", shard: "shard-b", httpUrl: "http://localhost:7003", wsUrl: "ws://localhost:7003/ws" },
@@ -12,13 +12,13 @@ const DEFAULT_NODES: NodeDescriptor[] = [
   { id: "node-c2", shard: "shard-c", httpUrl: "http://localhost:7006", wsUrl: "ws://localhost:7006/ws" }
 ];
 
-const DEFAULT_SHARDS: ShardDescriptor[] = [
+export const DEFAULT_SHARDS: ShardDescriptor[] = [
   { id: "shard-a", hashRange: [0, 5460], nodeIds: ["node-a1", "node-a2"] },
   { id: "shard-b", hashRange: [5461, 10922], nodeIds: ["node-b1", "node-b2"] },
   { id: "shard-c", hashRange: [10923, 16383], nodeIds: ["node-c1", "node-c2"] }
 ];
 
-function parseEnvJson<T>(raw: string | undefined): T | null {
+export function parseEnvJson<T>(raw: string | undefined): T | null {
   if (!raw) return null;
   try {
     return JSON.parse(raw) as T;

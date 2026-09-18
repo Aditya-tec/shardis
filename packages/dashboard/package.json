@@ -8,6 +8,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "test": "vitest run",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
@@ -19,6 +20,10 @@
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "typescript": "^5.7.2"
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.2",
+    "vite": "^7.0.0",
+    "vitest": "^5.0.1",
+    "ws": "^8.18.0"
   }
 }

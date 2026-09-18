@@ -13,5 +13,10 @@
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
     "dev:node": "pnpm --filter @shardis/node dev"
+  },
+  "pnpm": {
+    "overrides": {
+      "postcss": ">=8.5.28"
+    }
   }
 }

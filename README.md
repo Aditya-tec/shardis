@@ -124,7 +124,7 @@ Named here on purpose, not hidden:
 ```bash
 pnpm install
 pnpm --filter @shardis/node build   # everything else depends on this
-pnpm --filter @shardis/node test    # 149 tests, including real SIGKILL/failover/SIGTERM scenarios
+pnpm --filter @shardis/node test    # 160 tests, including real SIGKILL/failover/SIGTERM scenarios
 docker compose up -d                # the real 3-shard/6-node cluster
 curl http://localhost:7001/healthz  # {"status":"ok","node_id":"node-a1","role":"leader","shard":"shard-a",...}
 ```
@@ -178,17 +178,40 @@ in a few clicks. Once live, expect:
 ## Security posture
 
 - **Write-protection**: `PUBLIC_DEMO=true` requires a `write_key` field
-  matching `DEMO_WRITE_KEY` on every mutating request; reads stay open so
-  anyone can watch the live cluster without being able to trash it. Off
-  by default — local/CI stay open, no friction added to development.
+  matching `DEMO_WRITE_KEY` on every mutating request, compared with
+  `crypto.timingSafeEqual` over a fixed-length hash (not a plain `===`,
+  which leaks length/content through response-timing differences); reads
+  stay open so anyone can watch the live cluster without being able to
+  trash it. **Fails closed**: if `PUBLIC_DEMO=true` but `DEMO_WRITE_KEY`
+  was left unset — a real misconfiguration, not a hypothetical — every
+  write is rejected rather than silently letting them all through (a bare
+  `undefined !== undefined` would otherwise read as "matches"). Off by
+  default — local/CI stay open, no friction added to development.
 - **Per-connection rate limiting**: a token bucket per WebSocket
   connection, capacity and refill both `RATE_LIMIT_RPS` (default 50/s).
   Over the limit gets a clean `{"error":"rate_limited"}`, never a dropped
   or crashed connection.
+- **Per-connection subscription cap**: `SUBSCRIBE` is capped at 100
+  distinct channels per connection. The per-message rate limit bounds how
+  *fast* a client can act, not how much state each distinct action leaves
+  behind — without this, one connection could still grow the pub/sub
+  broker's channel map without bound over time, just more slowly.
 - **Input bounds**: `MAX_KEY_BYTES`/`MAX_VALUE_BYTES`, enforced in the
-  parser before anything touches the store. A malformed or oversized
-  message from one client gets a clean error and never affects another
-  connection — verified directly, not assumed.
+  parser before anything touches the store, and `maxPayload` on the
+  WebSocket server itself so an oversized frame is rejected before it's
+  even fully buffered. A malformed or oversized message from one client
+  gets a clean error and never affects another connection — verified
+  directly, not assumed.
+- **Non-root container**: the Docker image runs as `node:20-alpine`'s own
+  non-root `node` user (uid 1000), not root — verified by actually
+  starting a container and checking `whoami`/`id`, and that `/data`
+  (including a real Compose named volume) is still writable under that
+  user.
+- **Zero known dependency vulnerabilities**: `pnpm audit` is clean and
+  enforced in CI (`--audit-level moderate` fails the build); a `pnpm`
+  override pins `postcss` past a set of dev-toolchain source-map
+  disclosure advisories that Next.js's own pinned version hadn't picked up
+  yet.
 - **Transport**: `wss://`/`https://` are Render's and Vercel's own managed
   TLS — nothing to configure here, but worth saying explicitly rather than
   leaving it implicit.
@@ -196,8 +219,10 @@ in a few clicks. Once live, expect:
   (`render.yaml` marks it `sync: false` specifically so it's never
   committed) — never in the repo, never in client-side dashboard code.
 - **Explicitly out of scope**: per-key ACLs, encryption at rest for the
-  AOF file, mTLS between nodes. Real production-Redis features this
-  project doesn't attempt, named here rather than implied.
+  AOF file, mTLS between nodes, and per-IP/per-source connection-count
+  limiting (left to the hosting platform's own infrastructure, the same
+  way TLS termination is). Real production-Redis features this project
+  doesn't attempt, named here rather than implied.
 
 ## Operability
 
@@ -233,11 +258,15 @@ in a few clicks. Once live, expect:
 
 ```bash
 pnpm install
+pnpm audit --audit-level moderate   # zero known vulnerabilities, enforced in CI
 pnpm --filter @shardis/node build && pnpm --filter @shardis/node test
 pnpm --filter @shardis/cli build && pnpm --filter @shardis/cli test
 pnpm --filter @shardis/benchmarks lint && pnpm --filter @shardis/benchmarks test
-pnpm --filter @shardis/dashboard build
+pnpm --filter @shardis/dashboard lint && pnpm --filter @shardis/dashboard test && pnpm --filter @shardis/dashboard build
 ```
+
+207 automated tests across all four packages (160 node + 31 CLI + 4
+benchmarks + 12 dashboard), all run in CI on every push.
 
 Copy `.env.example` to `.env` and adjust per node — every config variable
 a node reads is documented there.

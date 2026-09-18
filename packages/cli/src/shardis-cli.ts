@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { createInterface } from "node:readline";
+import { pathToFileURL } from "node:url";
 import { ShardisClient, type ShardisResponse } from "./client.js";
 import { CommandError, parseCommand, parseCommandTokens } from "./commands.js";
 
-function parseArgv(argv: string[]): { url: string; writeKey: string | undefined; command: string[] } {
+export function parseArgv(argv: string[]): { url: string; writeKey: string | undefined; command: string[] } {
   let url = process.env.SHARDIS_URL ?? "ws://localhost:7000/ws";
   let writeKey = process.env.SHARDIS_WRITE_KEY;
   const rest: string[] = [];
@@ -100,7 +101,14 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+// Only auto-run when this file is the actual entrypoint (`node
+// shardis-cli.js ...`), not when a test imports it for parseArgv - without
+// this guard, importing the module would immediately try to open a real
+// WebSocket connection as a side effect of import alone.
+const isMainModule = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMainModule) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}
