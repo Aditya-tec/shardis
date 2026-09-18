@@ -1,293 +1,173 @@
 # Shardis
 
-A distributed, in-memory key-value store built from scratch: replication,
-sharding via consistent hashing, durability (AOF + snapshots), pub/sub, and
-a live cluster dashboard. Built to understand what a system like Redis does
-internally — replication protocols, hash-slot routing, heartbeat-based
-failover, crash recovery — not to wrap an existing client library.
+Shardis is a small distributed key-value store built to make distributed
+systems behavior visible: sharding, replication, failover, durability,
+pub/sub, live metrics, and chaos testing run through real WebSocket
+connections and real processes.
 
-Scale is deliberately modest. The point is correct, observable
-distributed-systems behavior under controlled chaos (kill a leader, watch
-the cluster recover, measure how long it took), not raw throughput.
+It is intentionally modest in scale. The value is in the implementation and
+the tests, not in pretending to be a production Redis replacement.
 
-![Live cluster dashboard](docs/media/dashboard-screenshot.png)
+![Shardis dashboard](docs/media/dashboard-screenshot.png)
 
-## What's actually here
+## What it does
 
-All 17 steps of the original build plan (`docs/architecture.md`) are
-implemented, tested, and validated against real running processes and
-containers — not just "it compiles":
+- In-memory key-value storage with TTLs and LRU eviction.
+- AOF durability with `fsync` before acknowledgements, snapshots, replay, and
+  crash recovery.
+- Redis CRC16 hash slots across fixed shard ranges, including hash tags.
+- JSON WebSocket protocol by default, plus an opt-in compact binary protocol.
+- `MOVED` redirects for cross-shard requests and follower writes.
+- Pub/sub with disconnect cleanup and subscription limits.
+- Deterministic failover by default, based on the lowest live node id.
+- Cross-shard leader gossip so redirects follow live failover state.
+- Runtime follower membership through `JOIN_URL` and membership relay.
+- Opt-in Raft-lite failover through `FAILOVER_MODE=raft`.
+- CLI, dashboard, Docker Compose topology, metrics, health checks, and
+  structured logs.
 
-- **Core engine**: in-memory store, TTL (lazy + active sweep), LRU eviction
-  under a memory cap.
-- **Durability**: append-only log with an fsync before every ack, periodic
-  snapshot + AOF compaction. Verified with a real `SIGKILL` mid-write-burst
-  and restart, comparing a sha256 checksum of every key before and after.
-- **Wire protocol**: JSON over WebSocket by default, with input bounds and
-  malformed-message handling from day one, plus an opt-in compact binary
-  framing for clients that want smaller frames (`shardis-cli --binary`).
-- **Pub/Sub**: `SUBSCRIBE`/`PUBLISH`/`UNSUBSCRIBE`, cleanly dropping
-  subscribers on disconnect.
-- **Sharding**: Redis Cluster's own CRC16/16384-slot scheme (including
-  `{hash-tag}` support), `MOVED` redirects for both cross-shard keys and
-  "you hit a follower" writes.
-- **Replication + failover**: a small full-mesh of peer connections per
-  shard, leader-broadcast writes, heartbeats, deterministic promotion
-  (lowest live node id) on leader timeout, and a full-resync protocol so a
-  follower that was offline catches up instead of silently missing data.
-  Verified with a real 3-process cluster: `SIGKILL` the leader, confirm the
-  right follower is promoted, confirm the *other* follower's `MOVED`
-  redirect points at the new leader (runtime-tracked, not the stale static
-  config), confirm a recovering old leader steps down instead of causing
-  split-brain.
-- **Opt-in Raft-lite failover**: set `FAILOVER_MODE=raft` for term-based
-  elections, one-vote-per-term log ordering checks, AppendEntries consistency,
-  randomized election timeouts, majority commit tracking, and recovery of a
-  killed leader's committed data. Deterministic promotion remains the default
-  and is unchanged.
-- **Cross-shard leader gossip**: every node exchanges lightweight leader
-  announcements across the whole cluster, so a `MOVED` response for another
-  shard follows that shard's live failover target instead of relying only on
-  its boot-time config. Cold-start and temporarily disconnected nodes retain
-  the static URL as a fallback until gossip converges.
-- **Graceful shutdown**: real `SIGTERM` handling, verified against an
-  actual Linux container (`docker compose stop`), not simulated — Windows
-  doesn't deliver real signals to child processes, which is exactly the
-  kind of platform gap this project tries not to paper over (see below).
-- **Docker Compose**: the full 3-shard/6-node cluster, one image, real
-  named volumes, `HEALTHCHECK`s that gate startup order.
-- **Dashboard**: hash ring, live node table (polling `/healthz`+`/metrics`),
-  a live event feed (every node's structured logs, streamed straight from
-  the server), and an in-browser console. Talks directly to each node from
-  the browser — no dashboard backend.
-- **Benchmarks**: throughput, failover time, rebalance %, and replication
-  lag — each run appends a dated, commit-tagged row to
-  [`docs/benchmarks.md`](docs/benchmarks.md), not a one-off number.
-- **CI**: unit + real-process integration tests on every push; a weekly
-  workflow that boots the actual Compose cluster and re-runs the full
-  benchmark suite.
-- **Security**: write-key protection and per-connection rate limiting for
-  the public demo, with `GET`/`SUBSCRIBE` always left open.
+Every feature is covered by unit tests and the important failure paths have
+real multi-process integration tests, including SIGKILL recovery.
 
-## Architecture
+## Quick start
 
-```
-packages/
-  node/         # the store node: engine, persistence, replication, hashring, protocol, security
-  cli/          # shardis-cli - a WS client with MOVED-following
-  dashboard/    # live cluster dashboard (Next.js, talks to nodes directly from the browser)
-  benchmarks/   # throughput / failover / rebalance / replication-lag, each dated in docs/benchmarks.md
-docs/
-  architecture.md   # the original build spec this repo followed, step by step
-  benchmarks.md     # dated results, one table per benchmark
-  deployment.md     # how to actually put the Render+Vercel demo live
-cluster.config.local.json    # 3-shard/6-node local topology (Docker Compose)
-cluster.config.render.json   # reduced 1-shard/2-node public-demo topology
-docker-compose.yml            # the primary environment - unlimited, free, real containers
-render.yaml                   # Blueprint for the secondary public demo
-```
-
-Every node runs the identical binary; role (leader/follower) and shard
-assignment come from `cluster.config.*.json` and env vars, not a code
-branch. Any node can receive any client request: if the key belongs to a
-different shard, or this node isn't currently that shard's leader, it
-responds with `{"error":"MOVED","shard":...,"leader":...}` instead of
-proxying — real Redis Cluster behavior, and `shardis-cli`/the dashboard
-console both follow it automatically.
-
-## What's real vs. simplified
-
-Named here on purpose, not hidden:
-
-- **Deterministic leader promotion is still the default.** A follower that stops
-  hearing from its believed leader computes the lowest node id among
-  itself and its currently-live peers and promotes itself if it's that id.
-  Any peer's self-declared "I am leader" is trusted by whoever observes
-  it — including overriding a node's belief in its *own* leadership, which
-  is what lets a recovering old leader learn it's been superseded without
-  a coordinator. This is real, tested, working failover — it is not
-  consensus, and a network partition could theoretically produce a brief
-  split-brain window. `FAILOVER_MODE=raft` enables the separate Raft-lite
-  controller when term-based consensus is required.
-- **Static shard ownership, dynamic followers.** `cluster.config.*.json` is
-  still read once at boot for shard ranges and the initial leader/follower
-  set, but a new follower can join a running shard with `JOIN_URL`; members
-  relay the addition and graceful departure without changing hash ownership.
-- **Hash-range partitioning, not virtual-node consistent hashing.** Each
-  shard owns a fixed, contiguous block of the 16384 hash slots (exactly
-  Redis Cluster's own scheme). This is simpler than a virtual-node ring,
-  but it costs more on rebalance: [`docs/benchmarks.md`](docs/benchmarks.md)'s
-  Rebalance table shows a real 3→4 shard *add* moving ~50% of keys,
-  roughly double a virtual-node ring's textbook ~25% for that case — a
-  genuine, measured consequence of redividing fixed ranges, not a guess.
-  (A 3→2 *remove* happens to land close to its own ~50% textbook
-  expectation — the two scenarios aren't symmetric, which is exactly why
-  this is measured per-scenario instead of assumed.)
-- **JSON is still the default wire format.** It stays debuggable with
-  `wscat`/browser devtools; the opt-in binary framing trades that convenience
-  for smaller frames when using a codec-aware client.
-- **Gossip is eventually consistent, not a consensus system.** A node may
-  briefly use the static leader URL after a cold start or while disconnected
-  from the node that knows about a failover. The deterministic failover
-  rules remain the source of truth within each shard; gossip only distributes
-  the resulting leader fact across shard boundaries.
-- **Raft-lite deliberately omits two production Raft features.**
-  `currentTerm`/`votedFor` are in memory, so a restart forgets them, and
-  membership changes use the deterministic mode's gossip rather than Raft
-  joint consensus. Both are explicit scope boundaries, not hidden guarantees.
-
-## Try it locally
+Requirements: Node.js 20 or newer, pnpm 9, and Docker for the full cluster.
 
 ```bash
 pnpm install
-pnpm --filter @shardis/node build   # everything else depends on this
-pnpm --filter @shardis/node test    # 160 tests, including real SIGKILL/failover/SIGTERM scenarios
-docker compose up -d                # the real 3-shard/6-node cluster
-curl http://localhost:7001/healthz  # {"status":"ok","node_id":"node-a1","role":"leader","shard":"shard-a",...}
+pnpm build
+pnpm test
 ```
 
-Then either `pnpm --filter @shardis/cli build && node packages/cli/dist/shardis-cli.js --url ws://localhost:7001/ws SET foo bar`,
-or run the dashboard (`pnpm --filter @shardis/dashboard dev`, then
-`http://localhost:3000`) and use its console instead.
+Start the six-node local cluster:
 
-Kill a leader for real and watch it recover:
+```bash
+docker compose up -d
+curl http://localhost:7001/healthz
+```
+
+Build and use the CLI:
+
+```bash
+pnpm --filter @shardis/cli build
+node packages/cli/dist/shardis-cli.js --url ws://localhost:7001/ws SET foo bar
+node packages/cli/dist/shardis-cli.js --url ws://localhost:7001/ws GET foo
+```
+
+The CLI follows `MOVED` redirects automatically. Use `--binary` to send and
+receive the compact binary protocol:
+
+```bash
+node packages/cli/dist/shardis-cli.js --binary --url ws://localhost:7001/ws SET foo bar
+```
+
+Run the dashboard locally with:
+
+```bash
+pnpm --filter @shardis/dashboard dev
+```
+
+Then open `http://localhost:3000`.
+
+## Failure modes
+
+Kill a deterministic leader and watch its follower take over:
 
 ```bash
 docker compose kill -s SIGKILL node-a1
-curl http://localhost:7002/healthz   # role flips to "leader" within HEARTBEAT_TIMEOUT_MS
-docker compose up -d node-a1         # rejoins as a follower, full-resyncs, no split-brain
+curl http://localhost:7002/healthz
+docker compose up -d node-a1
 ```
 
-![A real chaos test: node-a1 is SIGKILLed, node-a2 is promoted, the live event feed shows failover_triggered as it happens](docs/media/chaos-failover.gif)
+The returning node reconnects and performs a full resync. The repository also
+tests follower outages, crash recovery, graceful shutdown, stale cross-shard
+redirects, and dynamic follower joins with actual processes.
 
-## Benchmarks
+## Replication modes
 
-Full dated history in [`docs/benchmarks.md`](docs/benchmarks.md). Most
-recent numbers as of this writeup:
+### Deterministic mode
 
-| Benchmark | Result |
-| --- | --- |
-| Throughput | ~1,900–2,300 ops/sec (10–20 concurrent clients, mixed SET/GET, single node, this dev machine) |
-| Failover | ~2.8s promotion time at the default 3000ms heartbeat timeout; first accepted write on the new leader within 10ms of that |
-| Rebalance (3→4 shards) | ~50% of keys move — see "hash-range vs. virtual-node" above for why that's roughly double the textbook expectation |
-| Replication lag | avg ~4.5ms, p95 ~7ms, over 50 writes on this dev machine |
+This is the default and preserves the original simple operating model. A
+follower that loses its leader waits for the lowest live node id to promote
+itself. It is tested and useful for controlled deployments, but it is not
+consensus: a network partition can still create a split-brain window.
 
-Re-run any of them: `pnpm --filter @shardis/node build && pnpm --filter @shardis/benchmarks bench:<throughput|failover|rebalance|replication-lag>`.
+### Raft-lite mode
 
-## Live demo
+Set `FAILOVER_MODE=raft` on every node in a shard. The opt-in controller adds:
 
-Not deployed yet. `render.yaml` and `cluster.config.render.json` are
-written and locally validated (the node boots correctly under the exact
-env vars Render will set — see the Step 16 commit); actually putting it
-live needs your own Render + Vercel accounts, which this session didn't
-have access to. Follow [`docs/deployment.md`](docs/deployment.md) to do it
-in a few clicks. Once live, expect:
+- randomized election timeouts;
+- terms and one vote per term;
+- log up-to-date checks before granting votes;
+- AppendEntries consistency checks;
+- majority commit tracking; and
+- leader replacement after SIGKILL without losing committed data.
 
-- **Slow first request after idle.** Render's free services spin down
-  after 15 minutes and take ~1 minute to wake on the next request.
-- **No data survives a redeploy or spin-down/wake cycle.** No persistent
-  disk on the free tier — a known, deliberate limitation of the public
-  demo, not the local Compose cluster (which uses real volumes).
-- **Writes need a key.** The public demo runs `PUBLIC_DEMO=true`; `GET`/
-  `SUBSCRIBE` stay open, `SET`/`DEL`/`EXPIRE`/`PUBLISH` need `write_key`
-  (`shardis-cli --write-key <key> ...`).
+This is deliberately a lite implementation. `currentTerm` and `votedFor` are
+not persisted, and membership changes do not use Raft joint consensus. Those
+limitations are explicit rather than implied guarantees.
 
-## Security posture
+## Dynamic followers
 
-- **Write-protection**: `PUBLIC_DEMO=true` requires a `write_key` field
-  matching `DEMO_WRITE_KEY` on every mutating request, compared with
-  `crypto.timingSafeEqual` over a fixed-length hash (not a plain `===`,
-  which leaks length/content through response-timing differences); reads
-  stay open so anyone can watch the live cluster without being able to
-  trash it. **Fails closed**: if `PUBLIC_DEMO=true` but `DEMO_WRITE_KEY`
-  was left unset — a real misconfiguration, not a hypothetical — every
-  write is rejected rather than silently letting them all through (a bare
-  `undefined !== undefined` would otherwise read as "matches"). Off by
-  default — local/CI stay open, no friction added to development.
-- **Per-connection rate limiting**: a token bucket per WebSocket
-  connection, capacity and refill both `RATE_LIMIT_RPS` (default 50/s).
-  Over the limit gets a clean `{"error":"rate_limited"}`, never a dropped
-  or crashed connection.
-- **Per-connection subscription cap**: `SUBSCRIBE` is capped at 100
-  distinct channels per connection. The per-message rate limit bounds how
-  *fast* a client can act, not how much state each distinct action leaves
-  behind — without this, one connection could still grow the pub/sub
-  broker's channel map without bound over time, just more slowly.
-- **Input bounds**: `MAX_KEY_BYTES`/`MAX_VALUE_BYTES`, enforced in the
-  parser before anything touches the store, and `maxPayload` on the
-  WebSocket server itself so an oversized frame is rejected before it's
-  even fully buffered. A malformed or oversized message from one client
-  gets a clean error and never affects another connection — verified
-  directly, not assumed.
-- **Non-root container**: the Docker image runs as `node:20-alpine`'s own
-  non-root `node` user (uid 1000), not root — verified by actually
-  starting a container and checking `whoami`/`id`, and that `/data`
-  (including a real Compose named volume) is still writable under that
-  user.
-- **Zero known dependency vulnerabilities**: `pnpm audit` is clean and
-  enforced in CI (`--audit-level moderate` fails the build); a `pnpm`
-  override pins `postcss` past a set of dev-toolchain source-map
-  disclosure advisories that Next.js's own pinned version hadn't picked up
-  yet.
-- **Transport**: `wss://`/`https://` are Render's and Vercel's own managed
-  TLS — nothing to configure here, but worth saying explicitly rather than
-  leaving it implicit.
-- **Secrets**: `DEMO_WRITE_KEY` lives only in the Render dashboard
-  (`render.yaml` marks it `sync: false` specifically so it's never
-  committed) — never in the repo, never in client-side dashboard code.
-- **Explicitly out of scope**: per-key ACLs, encryption at rest for the
-  AOF file, mTLS between nodes, and per-IP/per-source connection-count
-  limiting (left to the hosting platform's own infrastructure, the same
-  way TLS termination is). Real production-Redis features this project
-  doesn't attempt, named here rather than implied.
+Shard ranges and initial leaders remain in the cluster config. A new follower
+does not need to be added to the existing nodes' follower lists. Give it the
+leader URL and a reachable node URL:
 
-## Operability
+```bash
+JOIN_URL=ws://127.0.0.1:7001/ws
+NODE_URL=ws://127.0.0.1:7003/ws
+```
 
-- **`GET /healthz`**: `{status, node_id, role, shard, uptime_s}` — role is
-  live (`replication.isLeader()`), not the boot-time `ROLE` env var, so it
-  reflects an actual failover.
-- **`GET /metrics`**: key count, evictions, `ops_total`, connected
-  sockets/peers, and replication lag (`null` on a leader) — CORS-enabled
-  specifically so the dashboard can read it directly from the browser.
-- **Graceful shutdown**: `SIGTERM`/`SIGINT` stop accepting new writes
-  (existing connections get a clean `{"error":"shutting_down"}`, not a
-  hang or a silently dropped message), close every WebSocket with a clean
-  1001 frame, then exit. This is exactly what Render sends before
-  spinning a free service down.
-- **Structured logs**: one JSON line per event to stdout
-  (`write_applied`, `replication_applied`, `failover_triggered`,
-  `leader_changed`, `moved_redirect`, `client_rejected`, ...) — the same
-  events the dashboard's live feed streams live over WebSocket.
+The new node sends `MEMBER_JOIN`; the recipient adds it, connects to it, and
+relays `MEMBER_ANNOUNCE` to known members. A graceful shutdown sends
+`MEMBER_LEAVE`. This changes only the follower set, never hash ownership.
 
-## What you'd add with more time
+## Configuration
 
-- **Raft-lite leader election**, replacing deterministic promotion — the
-  single biggest "understands consensus" signal, genuinely hard, didn't
-  want it to block shipping everything else.
-- **Cross-shard gossip** so a `MOVED` to a different shard reflects that
-  shard's *current* leader, not just its static config entry.
-- **Gossip-based dynamic membership**, replacing the static topology file.
-- **A compact binary wire protocol**, replacing JSON.
-- **A write-key field in the dashboard console** — right now authenticated
-  writes against a `PUBLIC_DEMO` node need `shardis-cli --write-key`.
+Configuration is supplied through environment variables. `.env.example` lists
+the complete set. The most important values are:
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `NODE_ID` | Stable node identity | `node-a1` |
+| `ROLE` | Boot role hint | `leader` |
+| `SHARD_ID` | Shard assignment | `shard-a` |
+| `CLUSTER_CONFIG_PATH` | Shard and node topology | `./cluster.config.local.json` |
+| `PORT` | WebSocket and HTTP port | `7000` |
+| `FAILOVER_MODE` | `deterministic` or `raft` | `deterministic` |
+| `JOIN_URL` | Existing leader for a dynamic follower join | unset |
+| `NODE_URL` | Reachable WebSocket URL for this node | derived from `PORT` |
+| `DATA_DIR` | AOF and snapshot directory | `./data/<NODE_ID>` |
+| `PUBLIC_DEMO` | Enable write-key protection | `false` |
+| `DEMO_WRITE_KEY` | Required key when public demo protection is enabled | unset |
+
+## HTTP endpoints
+
+- `GET /healthz` returns node id, shard, uptime, and current role.
+- `GET /metrics` returns key count, evictions, operation count, connected
+  peers, and replication lag.
+- WebSocket requests use `GET`, `SET`, `DEL`, `EXPIRE`, `SUBSCRIBE`,
+  `UNSUBSCRIBE`, and `PUBLISH`.
+
+## Repository layout
+
+```text
+packages/node/       storage node, protocol, persistence, replication
+packages/cli/        shardis-cli WebSocket client
+packages/dashboard/  Next.js live dashboard
+packages/benchmarks/ benchmark runners and report generation
+docs/                architecture, deployment, and benchmark history
+```
 
 ## Development
 
 ```bash
-pnpm install
-pnpm audit --audit-level moderate   # zero known vulnerabilities, enforced in CI
-pnpm --filter @shardis/node build && pnpm --filter @shardis/node test
-pnpm --filter @shardis/cli build && pnpm --filter @shardis/cli test
-pnpm --filter @shardis/benchmarks lint && pnpm --filter @shardis/benchmarks test
-pnpm --filter @shardis/dashboard lint && pnpm --filter @shardis/dashboard test && pnpm --filter @shardis/dashboard build
+pnpm build
+pnpm test
+pnpm lint
+pnpm audit --audit-level moderate
 ```
 
-207 automated tests across all four packages (160 node + 31 CLI + 4
-benchmarks + 12 dashboard), all run in CI on every push.
-
-Copy `.env.example` to `.env` and adjust per node — every config variable
-a node reads is documented there.
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+The CI workflow runs dependency installation, audit, builds, all package
+tests, type checks, dashboard build, and the real-process node integration
+tests on every push and pull request.

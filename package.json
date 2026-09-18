@@ -3,7 +3,6 @@
   "private": true,
   "version": "0.0.0",
   "description": "A distributed, in-memory key-value store built from scratch: replication, sharding, durability, pub/sub, and a live cluster dashboard.",
-  "license": "MIT",
   "packageManager": "pnpm@9.0.0",
   "engines": {
     "node": ">=20"

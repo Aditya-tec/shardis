@@ -54,8 +54,13 @@ export class ClusterGossip {
   stop(): void {
     this.stopped = true;
     for (const connection of this.connections.values()) {
-      connection.socket.removeAllListeners();
-      connection.socket.close();
+      const socket = connection.socket;
+      socket.removeAllListeners();
+      if (socket.readyState === WebSocket.CONNECTING) {
+        socket.terminate();
+      } else if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CLOSING) {
+        socket.close();
+      }
     }
     this.connections.clear();
   }
