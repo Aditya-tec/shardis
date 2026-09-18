@@ -15,6 +15,7 @@ import { parseRequest } from "./protocol/parse.js";
 import { isStoreRequest, type ErrResponse, type Response } from "./protocol/types.js";
 import { PubSubBroker, type Subscriber } from "./pubsub/broker.js";
 import { dispatchPubSub } from "./pubsub/dispatch.js";
+import { ClusterGossip } from "./gossip/clusterGossip.js";
 import { ReplicationManager } from "./replication/manager.js";
 import { TokenBucket } from "./security/rateLimit.js";
 import { writeKeyValid } from "./security/safeCompare.js";
@@ -27,6 +28,7 @@ export interface App {
   pubsub: PubSubBroker;
   ring: HashRing;
   replication: ReplicationManager;
+  clusterGossip: ClusterGossip;
   log: (event: string, fields?: Record<string, unknown>) => void;
   snapshotNow: () => void;
   close: () => void;
@@ -72,6 +74,12 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
   const ownShard = clusterConfig.shards.find((shard) => shard.id === config.shardId);
   if (!ownShard) throw new Error(`SHARD_ID "${config.shardId}" not found in cluster config`);
   const shardPeers = [ownShard.leader, ...ownShard.followers].filter((node) => node.id !== config.nodeId);
+  const clusterGossip = new ClusterGossip({
+    nodeId: config.nodeId,
+    shards: clusterConfig.shards,
+    heartbeatIntervalMs: config.heartbeatIntervalMs,
+    log
+  });
 
   const snapshotPath = join(config.dataDir, "snapshot.json");
   const snapshot = loadSnapshot(snapshotPath);
@@ -101,8 +109,10 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
     store,
     aofLog,
     log,
-    onFullSyncApplied: () => snapshotNow()
+    onFullSyncApplied: () => snapshotNow(),
+    onLeaderChanged: (leaderId) => clusterGossip.announceOwnShardLeader(config.shardId, leaderId)
   });
+  clusterGossip.start();
   replication.start();
 
   function snapshotNow(): void {
@@ -202,6 +212,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
         if (!isBinary) {
           const raw = data.toString("utf8");
           if (replication.handleInboundRaw(socket, raw)) return;
+          if (clusterGossip.handleInboundRaw(socket, raw)) return;
 
           if (raw.includes('"DASHBOARD_SUBSCRIBE"')) {
             let parsed: unknown;
@@ -265,7 +276,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
               ok: false,
               error: "MOVED",
               shard: owningShard.id,
-              leader: owningShard.leader.url
+              leader: clusterGossip.getCurrentLeaderUrl(owningShard.id) ?? owningShard.leader.url
             });
             return;
           }
@@ -343,6 +354,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
   function closeInternal(): void {
     clearInterval(snapshotTimer);
     store.stopSweep();
+    clusterGossip.stop();
     replication.stop();
     aofLog.close();
   }
@@ -392,6 +404,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
     pubsub,
     ring,
     replication,
+    clusterGossip,
     log,
     snapshotNow,
     close: closeInternal,

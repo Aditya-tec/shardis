@@ -21,6 +21,7 @@ export interface ReplicationManagerOptions {
   // caller can persist it as a fresh snapshot baseline (reusing app.ts's
   // existing snapshotNow, which also truncates the AOF).
   onFullSyncApplied?: () => void;
+  onLeaderChanged?: (leaderId: string) => void;
 }
 
 interface PeerConnState {
@@ -42,6 +43,7 @@ export class ReplicationManager {
   private readonly now: () => number;
   private readonly connectFn: (url: string) => WebSocket;
   private readonly onFullSyncApplied?: () => void;
+  private readonly onLeaderChanged?: (leaderId: string) => void;
 
   private currentLeaderId: string;
   private lastSeenFromLeaderAt: number;
@@ -67,6 +69,7 @@ export class ReplicationManager {
     this.now = options.now ?? Date.now;
     this.connectFn = options.connect ?? ((url) => new WebSocket(url));
     this.onFullSyncApplied = options.onFullSyncApplied;
+    this.onLeaderChanged = options.onLeaderChanged;
     this.currentLeaderId = options.initialLeaderId;
     this.lastSeenFromLeaderAt = this.now();
   }
@@ -328,6 +331,7 @@ export class ReplicationManager {
     this.lastSeenFromLeaderAt = this.now();
     this.lastAppliedLeaderId = null;
     this.log("leader_changed", { previousLeader: previous, newLeader: claimedLeaderId, reason: "peer_claim" });
+    this.onLeaderChanged?.(claimedLeaderId);
 
     if (claimedLeaderId !== this.nodeId) this.requestSyncFrom(claimedLeaderId);
   }
@@ -360,5 +364,6 @@ export class ReplicationManager {
     this.currentLeaderId = this.nodeId;
     this.replSeq = 0;
     this.log("failover_triggered", { previousLeader: previous, newLeader: this.nodeId });
+    this.onLeaderChanged?.(this.nodeId);
   }
 }

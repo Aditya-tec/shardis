@@ -40,6 +40,11 @@ containers — not just "it compiles":
   redirect points at the new leader (runtime-tracked, not the stale static
   config), confirm a recovering old leader steps down instead of causing
   split-brain.
+- **Cross-shard leader gossip**: every node exchanges lightweight leader
+  announcements across the whole cluster, so a `MOVED` response for another
+  shard follows that shard's live failover target instead of relying only on
+  its boot-time config. Cold-start and temporarily disconnected nodes retain
+  the static URL as a fallback until gossip converges.
 - **Graceful shutdown**: real `SIGTERM` handling, verified against an
   actual Linux container (`docker compose stop`), not simulated — Windows
   doesn't deliver real signals to child processes, which is exactly the
@@ -114,12 +119,11 @@ Named here on purpose, not hidden:
 - **JSON is still the default wire format.** It stays debuggable with
   `wscat`/browser devtools; the opt-in binary framing trades that convenience
   for smaller frames when using a codec-aware client.
-- **No cross-shard MOVED healing across a real network gap.** A node only
-  learns about *its own* shard's failovers live (via the peer mesh). A
-  `MOVED` pointing at a *different* shard still comes from the static
-  config, so it could theoretically be stale if that other shard failed
-  over since this node last restarted. Documented, not fixed — full
-  cross-shard gossip is out of scope for v1 (see below).
+- **Gossip is eventually consistent, not a consensus system.** A node may
+  briefly use the static leader URL after a cold start or while disconnected
+  from the node that knows about a failover. The deterministic failover
+  rules remain the source of truth within each shard; gossip only distributes
+  the resulting leader fact across shard boundaries.
 
 ## Try it locally
 
