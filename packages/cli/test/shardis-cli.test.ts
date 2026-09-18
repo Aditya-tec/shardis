@@ -18,7 +18,7 @@ afterEach(() => {
 
 describe("parseArgv", () => {
   it("defaults to ws://localhost:7000/ws with no write key and no command", () => {
-    expect(parseArgv([])).toEqual({ url: "ws://localhost:7000/ws", writeKey: undefined, command: [] });
+    expect(parseArgv([])).toEqual({ url: "ws://localhost:7000/ws", writeKey: undefined, binary: false, command: [] });
   });
 
   it("parses --url / -u", () => {
@@ -29,6 +29,11 @@ describe("parseArgv", () => {
   it("parses --write-key / -k", () => {
     expect(parseArgv(["--write-key", "secret"]).writeKey).toBe("secret");
     expect(parseArgv(["-k", "secret"]).writeKey).toBe("secret");
+  });
+
+  it("parses --binary", () => {
+    expect(parseArgv(["--binary"]).binary).toBe(true);
+    expect(parseArgv(["--binary", "GET", "foo"]).command).toEqual(["GET", "foo"]);
   });
 
   it("reads SHARDIS_URL and SHARDIS_WRITE_KEY from the environment", () => {

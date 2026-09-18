@@ -76,6 +76,13 @@ export interface ErrResponse {
   id: string | null;
   ok: false;
   error: string;
+  // Only present when error === "MOVED": the owning shard and its
+  // currently-known leader URL. Typed here (rather than left as an
+  // untyped extra property on a JSON.stringify literal, which is how
+  // app.ts's MOVED responses already worked before this field existed)
+  // so the binary codec can round-trip them too.
+  shard?: string;
+  leader?: string;
 }
 
 export type Response = OkResponse | ErrResponse;

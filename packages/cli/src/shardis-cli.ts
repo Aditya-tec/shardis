@@ -4,9 +4,10 @@ import { pathToFileURL } from "node:url";
 import { ShardisClient, type ShardisResponse } from "./client.js";
 import { CommandError, parseCommand, parseCommandTokens } from "./commands.js";
 
-export function parseArgv(argv: string[]): { url: string; writeKey: string | undefined; command: string[] } {
+export function parseArgv(argv: string[]): { url: string; writeKey: string | undefined; binary: boolean; command: string[] } {
   let url = process.env.SHARDIS_URL ?? "ws://localhost:7000/ws";
   let writeKey = process.env.SHARDIS_WRITE_KEY;
+  let binary = false;
   const rest: string[] = [];
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -14,6 +15,10 @@ export function parseArgv(argv: string[]): { url: string; writeKey: string | und
       i += 1;
       if (argv[i] === undefined) throw new CommandError("--url requires a value");
       url = argv[i];
+      continue;
+    }
+    if (argv[i] === "--binary") {
+      binary = true;
       continue;
     }
     // Required only against a node running with PUBLIC_DEMO=true; ignored
@@ -27,7 +32,7 @@ export function parseArgv(argv: string[]): { url: string; writeKey: string | und
     rest.push(argv[i]);
   }
 
-  return { url, writeKey, command: rest };
+  return { url, writeKey, binary, command: rest };
 }
 
 function printPush(message: ShardisResponse): void {
@@ -85,8 +90,8 @@ async function runRepl(client: ShardisClient, writeKey: string | undefined): Pro
 }
 
 async function main(): Promise<void> {
-  const { url, writeKey, command } = parseArgv(process.argv.slice(2));
-  const client = new ShardisClient(url, printPush);
+  const { url, writeKey, binary, command } = parseArgv(process.argv.slice(2));
+  const client = new ShardisClient(url, printPush, binary);
   await client.connect();
 
   try {

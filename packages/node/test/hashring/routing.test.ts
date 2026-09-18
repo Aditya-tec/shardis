@@ -8,6 +8,8 @@ import WebSocket from "ws";
 import { createApp, type App } from "../../src/app.js";
 import type { NodeConfig } from "../../src/config.js";
 import { keySlot } from "../../src/hashring/hash.js";
+import { decodeResponse, encodeRequest } from "../../src/protocol/binaryCodec.js";
+import type { Response } from "../../src/protocol/types.js";
 
 const TWO_SHARD_FIXTURE = fileURLToPath(new URL("../fixtures/cluster.two-shard.json", import.meta.url));
 
@@ -56,6 +58,12 @@ async function connect(url: string): Promise<WebSocket> {
 function nextMessage(socket: WebSocket): Promise<Record<string, unknown>> {
   return new Promise((resolve) => {
     socket.once("message", (data) => resolve(JSON.parse(data.toString("utf8"))));
+  });
+}
+
+function nextBinaryResponse(socket: WebSocket): Promise<Response> {
+  return new Promise((resolve) => {
+    socket.once("message", (data) => resolve(decodeResponse(data as Buffer)));
   });
 }
 
@@ -111,6 +119,23 @@ describe("MOVED routing across shards", () => {
     const key = findKeyForShard("shard-b");
     socket.send(JSON.stringify({ id: "1", op: "GET", key }));
     expect(await nextMessage(socket)).toEqual({
+      id: "1",
+      ok: false,
+      error: "MOVED",
+      shard: "shard-b",
+      leader: "ws://leader-b.example/ws"
+    });
+  });
+
+  it("a binary-frame request gets a binary MOVED response with the same shard/leader fields", async () => {
+    const { url } = await registerApp({ shardId: "shard-a" });
+    const socket = await connect(url);
+    cleanups.push(async () => socket.close());
+
+    const key = findKeyForShard("shard-b");
+    socket.send(encodeRequest({ id: "1", op: "GET", key }));
+    const response = await nextBinaryResponse(socket);
+    expect(response).toEqual({
       id: "1",
       ok: false,
       error: "MOVED",

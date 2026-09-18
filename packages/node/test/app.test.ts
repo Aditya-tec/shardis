@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { createApp, type App } from "../src/app.js";
 import type { NodeConfig } from "../src/config.js";
+import { decodeResponse, encodeRequest } from "../src/protocol/binaryCodec.js";
+import type { Response } from "../src/protocol/types.js";
 
 const SINGLE_SHARD_FIXTURE = fileURLToPath(new URL("./fixtures/cluster.single-shard.json", import.meta.url));
 
@@ -59,6 +61,12 @@ async function connect(url: string): Promise<WebSocket> {
 function nextMessage(socket: WebSocket): Promise<unknown> {
   return new Promise((resolve) => {
     socket.once("message", (data) => resolve(JSON.parse(data.toString("utf8"))));
+  });
+}
+
+function nextBinaryResponse(socket: WebSocket): Promise<Response> {
+  return new Promise((resolve) => {
+    socket.once("message", (data) => resolve(decodeResponse(data as Buffer)));
   });
 }
 
@@ -359,4 +367,34 @@ describe("app WS protocol", () => {
     limitedApp.close();
     await new Promise<void>((resolve) => limitedApp.server.close(() => resolve()));
   });
+
+  it("accepts a real binary WS frame and replies binary (opt-in wire format)", async () => {
+    socket.send(encodeRequest({ id: "1", op: "SET", key: "foo", value: "bar" }));
+    expect(await nextBinaryResponse(socket)).toEqual({ id: "1", ok: true });
+
+    socket.send(encodeRequest({ id: "2", op: "GET", key: "foo" }));
+    expect(await nextBinaryResponse(socket)).toEqual({ id: "2", ok: true, value: "bar" });
+  });
+
+  it("binary and text frames interleave correctly on the same connection", async () => {
+    socket.send(encodeRequest({ id: "1", op: "SET", key: "a", value: "1" }));
+    expect(await nextBinaryResponse(socket)).toEqual({ id: "1", ok: true });
+
+    socket.send(JSON.stringify({ id: "2", op: "SET", key: "b", value: "2" }));
+    expect(await nextMessage(socket)).toEqual({ id: "2", ok: true });
+
+    socket.send(encodeRequest({ id: "3", op: "GET", key: "b" }));
+    expect(await nextBinaryResponse(socket)).toEqual({ id: "3", ok: true, value: "2" });
+  });
+
+  it("a malformed binary frame gets a clean binary error, not a crash", async () => {
+    socket.send(Buffer.from([255, 0, 0, 0, 99])); // unknown opcode, bogus id length
+    const response = await nextBinaryResponse(socket);
+    expect(response.ok).toBe(false);
+
+    // Connection survives; still works afterward.
+    socket.send(encodeRequest({ id: "after", op: "GET", key: "x" }));
+    expect(await nextBinaryResponse(socket)).toEqual({ id: "after", ok: true, value: null });
+  });
+
 });

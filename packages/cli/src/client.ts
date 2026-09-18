@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
+import { decodeResponse, encodeRequest } from "../../node/dist/protocol/binaryCodec.js";
+import type { Request } from "../../node/dist/protocol/types.js";
 
 export interface ShardisRequest {
   op: string;
@@ -22,12 +24,14 @@ const MAX_MOVED_HOPS = 5;
 export class ShardisClient {
   private socket: WebSocket | null = null;
   private url: string;
+  private readonly binary: boolean;
   private readonly pending = new Map<string, (response: ShardisResponse) => void>();
   private readonly onPush?: (message: ShardisResponse) => void;
 
-  constructor(url: string, onPush?: (message: ShardisResponse) => void) {
+  constructor(url: string, onPush?: (message: ShardisResponse) => void, binary = false) {
     this.url = url;
     this.onPush = onPush;
+    this.binary = binary;
   }
 
   get currentUrl(): string {
@@ -41,7 +45,7 @@ export class ShardisClient {
       socket.once("open", () => resolve());
       socket.once("error", reject);
     });
-    socket.on("message", (data) => this.handleMessage(data.toString("utf8")));
+    socket.on("message", (data, isBinary) => this.handleMessage(data, isBinary));
   }
 
   async reconnect(url: string): Promise<void> {
@@ -65,7 +69,11 @@ export class ShardisClient {
     const socket = this.socket;
     const response = await new Promise<ShardisResponse>((resolve) => {
       this.pending.set(id, resolve);
-      socket.send(JSON.stringify({ id, ...request }));
+      if (this.binary) {
+        socket.send(encodeRequest({ id, ...request } as Request));
+      } else {
+        socket.send(JSON.stringify({ id, ...request }));
+      }
     });
 
     if (!response.ok && response.error === "MOVED" && typeof response.leader === "string") {
@@ -79,10 +87,15 @@ export class ShardisClient {
     return response;
   }
 
-  private handleMessage(raw: string): void {
+  private handleMessage(data: WebSocket.RawData, isBinary: boolean): void {
     let parsed: ShardisResponse;
     try {
-      parsed = JSON.parse(raw);
+      if (isBinary) {
+        const buffer = Buffer.isBuffer(data) ? data : Buffer.concat(Array.isArray(data) ? data : [Buffer.from(data)]);
+        parsed = decodeResponse(buffer) as ShardisResponse;
+      } else {
+        parsed = JSON.parse(data.toString("utf8"));
+      }
     } catch {
       return;
     }

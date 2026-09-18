@@ -9,9 +9,10 @@ import { AofLog } from "./persistence/aof.js";
 import { applyAofEntries } from "./persistence/replay.js";
 import { loadSnapshot, writeSnapshotAtomic } from "./persistence/snapshot.js";
 import { entryForRequest } from "./persistence/writer.js";
+import { decodeRequest, encodeResponse } from "./protocol/binaryCodec.js";
 import { dispatch } from "./protocol/dispatch.js";
 import { parseRequest } from "./protocol/parse.js";
-import { isStoreRequest, type ErrResponse } from "./protocol/types.js";
+import { isStoreRequest, type ErrResponse, type Response } from "./protocol/types.js";
 import { PubSubBroker, type Subscriber } from "./pubsub/broker.js";
 import { dispatchPubSub } from "./pubsub/dispatch.js";
 import { ReplicationManager } from "./replication/manager.js";
@@ -185,49 +186,64 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
 
     const rateLimiter = new TokenBucket(config.rateLimitRps, config.rateLimitRps);
 
-    socket.on("message", (data) => {
+    socket.on("message", (data, isBinary) => {
       // A single bad frame must produce an error response, never take the
       // connection or the process down with it.
+      // Responses echo the request's own framing (binary in -> binary out,
+      // text in -> text out) - the wire format is opt-in per message, not
+      // negotiated once for the whole connection.
+      const respond = (msg: Response): void => {
+        socket.send(isBinary ? encodeResponse(msg) : JSON.stringify(msg));
+      };
+
       try {
-        const raw = data.toString("utf8");
-        if (replication.handleInboundRaw(socket, raw)) return;
+        // Peer traffic (replication/gossip) and DASHBOARD_SUBSCRIBE are
+        // always text/JSON - only client requests use the opt-in binary path.
+        if (!isBinary) {
+          const raw = data.toString("utf8");
+          if (replication.handleInboundRaw(socket, raw)) return;
+
+          if (raw.includes('"DASHBOARD_SUBSCRIBE"')) {
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(raw);
+            } catch {
+              parsed = null;
+            }
+            if (
+              parsed &&
+              typeof parsed === "object" &&
+              (parsed as Record<string, unknown>).type === "DASHBOARD_SUBSCRIBE"
+            ) {
+              dashboardListeners.add(socket);
+              socket.send(JSON.stringify({ type: "DASHBOARD_SUBSCRIBED", node_id: config.nodeId }));
+              return;
+            }
+          }
+        }
 
         if (!rateLimiter.tryConsume()) {
           log("client_rejected", { error: "rate_limited" });
-          socket.send(JSON.stringify({ id: null, ok: false, error: "rate_limited" }));
+          respond({ id: null, ok: false, error: "rate_limited" });
           return;
         }
 
-        if (raw.includes('"DASHBOARD_SUBSCRIBE"')) {
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(raw);
-          } catch {
-            parsed = null;
-          }
-          if (parsed && typeof parsed === "object" && (parsed as Record<string, unknown>).type === "DASHBOARD_SUBSCRIBE") {
-            dashboardListeners.add(socket);
-            socket.send(JSON.stringify({ type: "DASHBOARD_SUBSCRIBED", node_id: config.nodeId }));
-            return;
-          }
-        }
-
-        const result = parseRequest(raw, {
-          maxKeyBytes: config.maxKeyBytes,
-          maxValueBytes: config.maxValueBytes
-        });
+        const limits = { maxKeyBytes: config.maxKeyBytes, maxValueBytes: config.maxValueBytes };
+        const result = isBinary
+          ? decodeRequest(Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer), limits)
+          : parseRequest(data.toString("utf8"), limits);
 
         if (!result.ok) {
           const response: ErrResponse = result.response;
           log("client_rejected", { error: response.error });
-          socket.send(JSON.stringify(response));
+          respond(response);
           return;
         }
 
         if (isStoreRequest(result.request)) {
           const isWriteOp = result.request.op !== "GET";
           if (shuttingDown && isWriteOp) {
-            socket.send(JSON.stringify({ id: result.request.id, ok: false, error: "shutting_down" }));
+            respond({ id: result.request.id, ok: false, error: "shutting_down" });
             return;
           }
 
@@ -237,36 +253,32 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
             !writeKeyValid(result.request.write_key, config.demoWriteKey)
           ) {
             log("client_rejected", { error: "write_key_required", op: result.request.op });
-            socket.send(JSON.stringify({ id: result.request.id, ok: false, error: "write_key_required" }));
+            respond({ id: result.request.id, ok: false, error: "write_key_required" });
             return;
           }
 
           const owningShard = ring.shardForKey(result.request.key);
           if (owningShard.id !== config.shardId) {
             log("moved_redirect", { key: result.request.key, shard: owningShard.id });
-            socket.send(
-              JSON.stringify({
-                id: result.request.id,
-                ok: false,
-                error: "MOVED",
-                shard: owningShard.id,
-                leader: owningShard.leader.url
-              })
-            );
+            respond({
+              id: result.request.id,
+              ok: false,
+              error: "MOVED",
+              shard: owningShard.id,
+              leader: owningShard.leader.url
+            });
             return;
           }
 
           if (isWriteOp && !replication.isLeader()) {
             log("moved_redirect", { key: result.request.key, shard: config.shardId, reason: "not_leader" });
-            socket.send(
-              JSON.stringify({
-                id: result.request.id,
-                ok: false,
-                error: "MOVED",
-                shard: config.shardId,
-                leader: replication.getCurrentLeaderUrl()
-              })
-            );
+            respond({
+              id: result.request.id,
+              ok: false,
+              error: "MOVED",
+              shard: config.shardId,
+              leader: replication.getCurrentLeaderUrl()
+            });
             return;
           }
 
@@ -283,7 +295,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
             log("write_applied", { op: result.request.op, key: result.request.key });
             if (aofEntry) replication.afterLocalWrite(aofEntry);
           }
-          socket.send(JSON.stringify(response));
+          respond(response);
           return;
         }
 
@@ -293,7 +305,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
           !writeKeyValid(result.request.write_key, config.demoWriteKey)
         ) {
           log("client_rejected", { error: "write_key_required", op: result.request.op });
-          socket.send(JSON.stringify({ id: result.request.id, ok: false, error: "write_key_required" }));
+          respond({ id: result.request.id, ok: false, error: "write_key_required" });
           return;
         }
 
@@ -303,7 +315,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
           subscribedChannels.size >= MAX_SUBSCRIPTIONS_PER_CONNECTION
         ) {
           log("client_rejected", { error: "too_many_subscriptions" });
-          socket.send(JSON.stringify({ id: result.request.id, ok: false, error: "too_many_subscriptions" }));
+          respond({ id: result.request.id, ok: false, error: "too_many_subscriptions" });
           return;
         }
 
@@ -311,10 +323,10 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
         if (result.request.op === "SUBSCRIBE") subscribedChannels.add(result.request.channel);
         if (result.request.op === "UNSUBSCRIBE") subscribedChannels.delete(result.request.channel);
         log("pubsub_event", { op: result.request.op, channel: result.request.channel });
-        socket.send(JSON.stringify(response));
+        respond(response);
       } catch (error) {
         log("message_handler_error", { error: error instanceof Error ? error.message : String(error) });
-        socket.send(JSON.stringify({ id: null, ok: false, error: "internal_error" }));
+        respond({ id: null, ok: false, error: "internal_error" });
       }
     });
 

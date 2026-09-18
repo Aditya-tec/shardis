@@ -26,6 +26,20 @@ async function fakeServer(handler: (msg: Record<string, unknown>) => Record<stri
   };
 }
 
+async function binaryFakeServer(handler: (msg: Buffer) => Buffer): Promise<FakeServer> {
+  const wss = new WebSocketServer({ port: 0 });
+  await new Promise<void>((resolve) => wss.once("listening", resolve));
+  wss.on("connection", (socket) => {
+    socket.on("message", (data) => socket.send(handler(Buffer.from(data))));
+  });
+  const port = (wss.address() as AddressInfo).port;
+  return {
+    wss,
+    url: `ws://127.0.0.1:${port}`,
+    close: () => new Promise<void>((resolve) => wss.close(() => resolve()))
+  };
+}
+
 describe("ShardisClient", () => {
   const cleanup: Array<() => Promise<void>> = [];
 
@@ -41,6 +55,23 @@ describe("ShardisClient", () => {
     cleanup.push(server.close);
 
     const client = new ShardisClient(server.url);
+    await client.connect();
+    cleanup.push(async () => client.close());
+
+    const response = await client.send({ op: "GET", key: "foo" });
+    expect(response).toEqual({ id: expect.any(String), ok: true, value: "bar" });
+  });
+
+  it("round-trips requests and responses in binary mode", async () => {
+    const { decodeRequest, encodeResponse } = await import("../../node/dist/protocol/binaryCodec.js");
+    const server = await binaryFakeServer((data) => {
+      const decoded = decodeRequest(data, { maxKeyBytes: 1024, maxValueBytes: 1024 });
+      if (!decoded.ok) throw new Error(decoded.response.error);
+      return encodeResponse({ id: decoded.request.id, ok: true, value: "bar" });
+    });
+    cleanup.push(server.close);
+
+    const client = new ShardisClient(server.url, undefined, true);
     await client.connect();
     cleanup.push(async () => client.close());
 

@@ -23,8 +23,9 @@ containers — not just "it compiles":
 - **Durability**: append-only log with an fsync before every ack, periodic
   snapshot + AOF compaction. Verified with a real `SIGKILL` mid-write-burst
   and restart, comparing a sha256 checksum of every key before and after.
-- **Wire protocol**: JSON over WebSocket, with input bounds and malformed-
-  message handling from day one.
+- **Wire protocol**: JSON over WebSocket by default, with input bounds and
+  malformed-message handling from day one, plus an opt-in compact binary
+  framing for clients that want smaller frames (`shardis-cli --binary`).
 - **Pub/Sub**: `SUBSCRIBE`/`PUBLISH`/`UNSUBSCRIBE`, cleanly dropping
   subscribers on disconnect.
 - **Sharding**: Redis Cluster's own CRC16/16384-slot scheme (including
@@ -110,8 +111,9 @@ Named here on purpose, not hidden:
   (A 3→2 *remove* happens to land close to its own ~50% textbook
   expectation — the two scenarios aren't symmetric, which is exactly why
   this is measured per-scenario instead of assumed.)
-- **JSON over WebSocket, not a binary protocol.** Debuggable with
-  `wscat`/browser devtools at the cost of some bytes on the wire.
+- **JSON is still the default wire format.** It stays debuggable with
+  `wscat`/browser devtools; the opt-in binary framing trades that convenience
+  for smaller frames when using a codec-aware client.
 - **No cross-shard MOVED healing across a real network gap.** A node only
   learns about *its own* shard's failovers live (via the peer mesh). A
   `MOVED` pointing at a *different* shard still comes from the static
