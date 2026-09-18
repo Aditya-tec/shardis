@@ -21,7 +21,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/ws": "^8.5.13",
-    "typescript": "^5.7.2",
+    "typescript": "^7.0.2",
     "vite": "^7.0.0",
     "vitest": "^5.0.1",
     "ws": "^8.18.0"
