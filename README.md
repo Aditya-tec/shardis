@@ -40,6 +40,11 @@ containers — not just "it compiles":
   redirect points at the new leader (runtime-tracked, not the stale static
   config), confirm a recovering old leader steps down instead of causing
   split-brain.
+- **Opt-in Raft-lite failover**: set `FAILOVER_MODE=raft` for term-based
+  elections, one-vote-per-term log ordering checks, AppendEntries consistency,
+  randomized election timeouts, majority commit tracking, and recovery of a
+  killed leader's committed data. Deterministic promotion remains the default
+  and is unchanged.
 - **Cross-shard leader gossip**: every node exchanges lightweight leader
   announcements across the whole cluster, so a `MOVED` response for another
   shard follows that shard's live failover target instead of relying only on
@@ -94,7 +99,7 @@ console both follow it automatically.
 
 Named here on purpose, not hidden:
 
-- **Deterministic leader promotion, not Raft.** A follower that stops
+- **Deterministic leader promotion is still the default.** A follower that stops
   hearing from its believed leader computes the lowest node id among
   itself and its currently-live peers and promotes itself if it's that id.
   Any peer's self-declared "I am leader" is trusted by whoever observes
@@ -102,7 +107,8 @@ Named here on purpose, not hidden:
   is what lets a recovering old leader learn it's been superseded without
   a coordinator. This is real, tested, working failover — it is not
   consensus, and a network partition could theoretically produce a brief
-  split-brain window a real Raft/Paxos implementation would prevent.
+  split-brain window. `FAILOVER_MODE=raft` enables the separate Raft-lite
+  controller when term-based consensus is required.
 - **Static shard ownership, dynamic followers.** `cluster.config.*.json` is
   still read once at boot for shard ranges and the initial leader/follower
   set, but a new follower can join a running shard with `JOIN_URL`; members
@@ -125,6 +131,10 @@ Named here on purpose, not hidden:
   from the node that knows about a failover. The deterministic failover
   rules remain the source of truth within each shard; gossip only distributes
   the resulting leader fact across shard boundaries.
+- **Raft-lite deliberately omits two production Raft features.**
+  `currentTerm`/`votedFor` are in memory, so a restart forgets them, and
+  membership changes use the deterministic mode's gossip rather than Raft
+  joint consensus. Both are explicit scope boundaries, not hidden guarantees.
 
 ## Try it locally
 

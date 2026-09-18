@@ -1,6 +1,7 @@
 export interface NodeConfig {
   nodeId: string;
   role: "leader" | "follower";
+  failoverMode?: "deterministic" | "raft";
   shardId: string;
   clusterConfigPath: string;
   dataDir: string;
@@ -44,10 +45,15 @@ export function loadConfig(): NodeConfig {
   }
 
   const nodeId = requireEnv("NODE_ID", "node-a1");
+  const failoverMode = process.env.FAILOVER_MODE ?? "deterministic";
+  if (failoverMode !== "deterministic" && failoverMode !== "raft") {
+    throw new Error(`FAILOVER_MODE must be "deterministic" or "raft", got: ${failoverMode}`);
+  }
 
   return {
     nodeId,
     role,
+    failoverMode,
     shardId: requireEnv("SHARD_ID", "shard-a"),
     clusterConfigPath: requireEnv("CLUSTER_CONFIG_PATH", "./cluster.config.local.json"),
     dataDir: requireEnv("DATA_DIR", `./data/${nodeId}`),

@@ -15,6 +15,8 @@ import { parseRequest } from "./protocol/parse.js";
 import { isStoreRequest, type ErrResponse, type Response } from "./protocol/types.js";
 import { PubSubBroker, type Subscriber } from "./pubsub/broker.js";
 import { dispatchPubSub } from "./pubsub/dispatch.js";
+import { RaftManager } from "./raft/raftManager.js";
+import type { ReplicationController } from "./replication/controller.js";
 import { ClusterGossip } from "./gossip/clusterGossip.js";
 import { ReplicationManager } from "./replication/manager.js";
 import { TokenBucket } from "./security/rateLimit.js";
@@ -27,7 +29,7 @@ export interface App {
   aofLog: AofLog;
   pubsub: PubSubBroker;
   ring: HashRing;
-  replication: ReplicationManager;
+  replication: ReplicationController;
   clusterGossip: ClusterGossip;
   log: (event: string, fields?: Record<string, unknown>) => void;
   snapshotNow: () => void;
@@ -99,21 +101,33 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
     log("aof_replayed", { entries: replayed.length, keys: store.size });
   }
 
-  const replication = new ReplicationManager({
-    nodeId: config.nodeId,
-    shardId: config.shardId,
-    peers: shardPeers,
-    initialLeaderId: ownShard.leader.id,
-    heartbeatIntervalMs: config.heartbeatIntervalMs,
-    heartbeatTimeoutMs: config.heartbeatTimeoutMs,
-    store,
-    aofLog,
-    nodeUrl: config.nodeUrl ?? `ws://127.0.0.1:${config.port}/ws`,
-    joinUrl: config.joinUrl,
-    log,
-    onFullSyncApplied: () => snapshotNow(),
-    onLeaderChanged: (leaderId) => clusterGossip.announceOwnShardLeader(config.shardId, leaderId)
-  });
+  const replication: ReplicationController = config.failoverMode === "raft"
+    ? new RaftManager({
+        nodeId: config.nodeId,
+        shardId: config.shardId,
+        peers: shardPeers,
+        heartbeatIntervalMs: config.heartbeatIntervalMs,
+        heartbeatTimeoutMs: config.heartbeatTimeoutMs,
+        store,
+        aofLog,
+        log,
+        onLeaderChanged: (leaderId) => clusterGossip.announceOwnShardLeader(config.shardId, leaderId)
+      })
+    : new ReplicationManager({
+        nodeId: config.nodeId,
+        shardId: config.shardId,
+        peers: shardPeers,
+        initialLeaderId: ownShard.leader.id,
+        heartbeatIntervalMs: config.heartbeatIntervalMs,
+        heartbeatTimeoutMs: config.heartbeatTimeoutMs,
+        store,
+        aofLog,
+        nodeUrl: config.nodeUrl ?? `ws://127.0.0.1:${config.port}/ws`,
+        joinUrl: config.joinUrl,
+        log,
+        onFullSyncApplied: () => snapshotNow(),
+        onLeaderChanged: (leaderId) => clusterGossip.announceOwnShardLeader(config.shardId, leaderId)
+      });
   clusterGossip.start();
   replication.start();
 
