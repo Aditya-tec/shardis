@@ -10,7 +10,6 @@ on:
 permissions:
   actions: read
   contents: read
-  security-events: write
 
 jobs:
   analyze:
@@ -29,3 +28,6 @@ jobs:
       - uses: github/codeql-action/analyze@v3
         with:
           category: /language:javascript-typescript
+          # Repository code scanning is not enabled yet. Keep analysis in CI
+          # without failing the workflow when GitHub cannot upload SARIF.
+          upload: false
