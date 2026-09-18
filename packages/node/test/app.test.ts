@@ -201,4 +201,44 @@ describe("app WS protocol", () => {
     expect(res.status).toBe(200);
     expect(body).toMatchObject({ status: "ok", node_id: "node-test", role: "leader", shard: "shard-a" });
   });
+
+  it("GET /metrics reports live counters that change as the store is used", async () => {
+    const port = (app.server.address() as AddressInfo).port;
+
+    const before = await (await fetch(`http://127.0.0.1:${port}/metrics`)).json();
+    expect(before).toMatchObject({
+      node_id: "node-test",
+      role: "leader",
+      shard: "shard-a",
+      keys: 0,
+      evictions: 0,
+      ops_total: 0,
+      connected_peers: 0,
+      replication_lag_ms: null
+    });
+    expect(before.connected_sockets).toBeGreaterThanOrEqual(1); // our own test socket
+
+    socket.send(JSON.stringify({ id: "1", op: "SET", key: "foo", value: "bar" }));
+    await nextMessage(socket);
+    socket.send(JSON.stringify({ id: "2", op: "GET", key: "foo" }));
+    await nextMessage(socket);
+
+    const after = await (await fetch(`http://127.0.0.1:${port}/metrics`)).json();
+    expect(after.keys).toBe(1);
+    expect(after.ops_total).toBe(2);
+  });
+
+  it("DASHBOARD_SUBSCRIBE streams every subsequent log event live to that connection", async () => {
+    socket.send(JSON.stringify({ type: "DASHBOARD_SUBSCRIBE" }));
+    expect(await nextMessage(socket)).toEqual({ type: "DASHBOARD_SUBSCRIBED", node_id: "node-test" });
+
+    const eventPromise = nextMessage(socket);
+    const other = await connect(url);
+    other.send(JSON.stringify({ id: "1", op: "SET", key: "watched", value: "v" }));
+    await nextMessage(other);
+    other.close();
+
+    const event = (await eventPromise) as Record<string, unknown>;
+    expect(event).toMatchObject({ event: "write_applied", op: "SET", key: "watched" });
+  });
 });

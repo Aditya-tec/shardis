@@ -48,6 +48,7 @@ export class ReplicationManager {
   private replSeq = 0;
   private lastAppliedSeq = 0;
   private lastAppliedLeaderId: string | null = null;
+  private lastLagMs: number | null = null;
 
   private readonly connections = new Map<string, PeerConnState>();
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -89,6 +90,13 @@ export class ReplicationManager {
 
   getConnectedPeerIds(): string[] {
     return [...this.connections.keys()];
+  }
+
+  // Time between the leader broadcasting a write and this node applying it,
+  // measured from the last REPL_OP applied. Only meaningful on a follower;
+  // null before any replication traffic has been seen.
+  getLastReplicationLagMs(): number | null {
+    return this.lastLagMs;
   }
 
   start(): void {
@@ -133,6 +141,7 @@ export class ReplicationManager {
   afterLocalWrite(entry: AofEntry): void {
     if (!this.isLeader()) return;
     this.replSeq += 1;
+    const ts = this.now();
 
     let message: PeerMessage;
     switch (entry.op) {
@@ -141,6 +150,7 @@ export class ReplicationManager {
           type: "REPL_OP",
           leaderId: this.nodeId,
           seq: this.replSeq,
+          ts,
           op: "SET",
           key: entry.key,
           value: entry.value,
@@ -148,13 +158,14 @@ export class ReplicationManager {
         };
         break;
       case "DEL":
-        message = { type: "REPL_OP", leaderId: this.nodeId, seq: this.replSeq, op: "DEL", key: entry.key };
+        message = { type: "REPL_OP", leaderId: this.nodeId, seq: this.replSeq, ts, op: "DEL", key: entry.key };
         break;
       case "EXPIRE":
         message = {
           type: "REPL_OP",
           leaderId: this.nodeId,
           seq: this.replSeq,
+          ts,
           op: "EXPIRE",
           key: entry.key,
           expiresAt: entry.expiresAt
@@ -275,6 +286,7 @@ export class ReplicationManager {
     }
     if (message.seq <= this.lastAppliedSeq) return;
     this.lastAppliedSeq = message.seq;
+    this.lastLagMs = Math.max(0, this.now() - message.ts);
 
     switch (message.op) {
       case "SET":

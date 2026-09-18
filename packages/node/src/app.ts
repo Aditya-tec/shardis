@@ -34,18 +34,35 @@ export interface App {
   shutdownGracefully: () => Promise<void>;
 }
 
-function makeLogger(nodeId: string) {
-  return (event: string, fields: Record<string, unknown> = {}) => {
-    console.log(
-      JSON.stringify({ ts: new Date().toISOString(), node_id: nodeId, level: "info", event, ...fields })
-    );
-  };
-}
-
 export function createApp(config: NodeConfig, startedAt = Date.now()): App {
   const store = new Store({ maxmemoryBytes: config.maxmemoryMb * 1024 * 1024 });
   const pubsub = new PubSubBroker();
-  const log = makeLogger(config.nodeId);
+  let opsTotal = 0;
+
+  // Dashboard clients subscribe to this same /ws endpoint (see
+  // DASHBOARD_SUBSCRIBE below) and receive every structured log line live,
+  // giving the dashboard's event feed real data with no separate pipeline.
+  const dashboardListeners = new Set<WebSocket>();
+  function log(event: string, fields: Record<string, unknown> = {}): void {
+    const line = JSON.stringify({
+      ts: new Date().toISOString(),
+      node_id: config.nodeId,
+      level: "info",
+      event,
+      ...fields
+    });
+    console.log(line);
+    for (const listener of dashboardListeners) {
+      if (listener.readyState === listener.OPEN) {
+        try {
+          listener.send(line);
+        } catch {
+          // Ignore; the listener's own close handler will drop it from the set.
+        }
+      }
+    }
+  }
+
   const clusterConfig = loadClusterConfig(config.clusterConfigPath);
   const ring = new HashRing(clusterConfig);
 
@@ -114,6 +131,25 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
       return;
     }
 
+    if (req.method === "GET" && req.url === "/metrics") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          node_id: config.nodeId,
+          role: replication.isLeader() ? "leader" : "follower",
+          shard: config.shardId,
+          uptime_s: Math.floor((Date.now() - startedAt) / 1000),
+          keys: store.size,
+          evictions: store.evictions,
+          ops_total: opsTotal,
+          connected_sockets: wss.clients.size,
+          connected_peers: replication.getConnectedPeerIds().length,
+          replication_lag_ms: replication.isLeader() ? null : replication.getLastReplicationLagMs()
+        })
+      );
+      return;
+    }
+
     res.writeHead(404, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "not_found" }));
   });
@@ -133,6 +169,20 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
       try {
         const raw = data.toString("utf8");
         if (replication.handleInboundRaw(socket, raw)) return;
+
+        if (raw.includes('"DASHBOARD_SUBSCRIBE"')) {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            parsed = null;
+          }
+          if (parsed && typeof parsed === "object" && (parsed as Record<string, unknown>).type === "DASHBOARD_SUBSCRIBE") {
+            dashboardListeners.add(socket);
+            socket.send(JSON.stringify({ type: "DASHBOARD_SUBSCRIBED", node_id: config.nodeId }));
+            return;
+          }
+        }
 
         const result = parseRequest(raw, {
           maxKeyBytes: config.maxKeyBytes,
@@ -190,6 +240,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
           }
 
           const response = dispatch(result.request, store);
+          opsTotal += 1;
           if (isWriteOp) {
             log("write_applied", { op: result.request.op, key: result.request.key });
             if (aofEntry) replication.afterLocalWrite(aofEntry);
@@ -207,7 +258,10 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
       }
     });
 
-    socket.on("close", () => pubsub.unsubscribeAll(subscriber));
+    socket.on("close", () => {
+      pubsub.unsubscribeAll(subscriber);
+      dashboardListeners.delete(socket);
+    });
 
     socket.on("error", (error) => {
       log("connection_error", { error: error.message });

@@ -7,7 +7,16 @@ export interface SyncEntry {
 export type PeerMessage =
   | { type: "PEER_HELLO"; nodeId: string; shardId: string }
   | { type: "HEARTBEAT"; nodeId: string; leaderId: string }
-  | { type: "REPL_OP"; leaderId: string; seq: number; op: "SET" | "DEL" | "EXPIRE"; key: string; value?: string; expiresAt?: number | null }
+  | {
+      type: "REPL_OP";
+      leaderId: string;
+      seq: number;
+      ts: number;
+      op: "SET" | "DEL" | "EXPIRE";
+      key: string;
+      value?: string;
+      expiresAt?: number | null;
+    }
   | { type: "REPL_ACK"; nodeId: string; leaderId: string; seq: number }
   | { type: "SYNC_REQUEST"; nodeId: string }
   | { type: "SYNC_RESPONSE"; entries: SyncEntry[] };
