@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build node package
+        run: pnpm --filter @shardis/node build
+
+      - name: Test node package (unit + real-process integration tests)
+        run: pnpm --filter @shardis/node test
+
+      - name: Build and test CLI
+        run: |
+          pnpm --filter @shardis/cli build
+          pnpm --filter @shardis/cli test
+
+      - name: Type-check benchmarks
+        run: pnpm --filter @shardis/benchmarks lint
+
+      - name: Build dashboard
+        run: pnpm --filter @shardis/dashboard build
