@@ -117,6 +117,15 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
   let shuttingDown = false;
 
   const server = createServer((req, res) => {
+    // /healthz and /metrics are read-only, non-sensitive status endpoints
+    // that the dashboard fetches directly from the browser (a different
+    // origin than each node), so they need CORS enabled to be readable
+    // there at all. Writes only ever happen over the WS protocol, which
+    // isn't subject to the same-origin fetch restriction in the first place.
+    if (req.url === "/healthz" || req.url === "/metrics") {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+    }
+
     if (req.method === "GET" && req.url === "/healthz") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(

@@ -202,6 +202,14 @@ describe("app WS protocol", () => {
     expect(body).toMatchObject({ status: "ok", node_id: "node-test", role: "leader", shard: "shard-a" });
   });
 
+  it("healthz/metrics allow cross-origin reads so the dashboard (a different origin) can fetch them", async () => {
+    const port = (app.server.address() as AddressInfo).port;
+    const healthz = await fetch(`http://127.0.0.1:${port}/healthz`);
+    const metrics = await fetch(`http://127.0.0.1:${port}/metrics`);
+    expect(healthz.headers.get("access-control-allow-origin")).toBe("*");
+    expect(metrics.headers.get("access-control-allow-origin")).toBe("*");
+  });
+
   it("GET /metrics reports live counters that change as the store is used", async () => {
     const port = (app.server.address() as AddressInfo).port;
 
