@@ -92,7 +92,13 @@ describe("AOF crash recovery (hard kill + restart)", () => {
     dataDir = mkdtempSync(join(tmpdir(), "shardis-crash-"));
     const port = randomPort();
 
-    child = spawnNode(port, dataDir);
+    // This test drives 26 writes + 26 reads over a single connection, one
+    // over the production default's 50-token burst capacity (RATE_LIMIT_RPS,
+    // see config.ts). On a fast enough loopback that whole sequence can
+    // complete before the bucket refills 2 tokens, tripping the per-
+    // connection rate limiter and silently dropping a "before" GET - not
+    // what this test is exercising, so raise the limit for this spawn.
+    child = spawnNode(port, dataDir, { RATE_LIMIT_RPS: "1000" });
     const socket = await connectWithRetry(`ws://127.0.0.1:${port}/ws`);
 
     const keys = Array.from({ length: 25 }, (_, i) => `key-${i}`);
@@ -115,7 +121,7 @@ describe("AOF crash recovery (hard kill + restart)", () => {
     await waitForExit(child);
     child = null;
 
-    child = spawnNode(port, dataDir);
+    child = spawnNode(port, dataDir, { RATE_LIMIT_RPS: "1000" });
     const socket2 = await connectWithRetry(`ws://127.0.0.1:${port}/ws`);
 
     const after: Record<string, unknown> = {};
