@@ -93,8 +93,8 @@ jobs:
       - name: Verify a real CLI write and read
         run: |
           # This key is in shard-a's 0-5460 range, whose published port is 7001.
-          pnpm --filter @shardis/cli start -- --url ws://localhost:7001/ws SET ci-smoke-2 ci-smoke-value
-          output=$(pnpm --filter @shardis/cli start -- --url ws://localhost:7001/ws GET ci-smoke-2)
+          node packages/cli/dist/shardis-cli.js --url ws://localhost:7001/ws SET ci-smoke-2 ci-smoke-value
+          output=$(node packages/cli/dist/shardis-cli.js --url ws://localhost:7001/ws GET ci-smoke-2)
           echo "$output"
           echo "$output" | grep -q 'ci-smoke-value'
 
