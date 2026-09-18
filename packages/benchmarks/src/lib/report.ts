@@ -1,9 +1,9 @@
 import { execSync } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../..", import.meta.url));
-const BENCHMARKS_PATH = `${REPO_ROOT}/docs/benchmarks.md`;
+const DEFAULT_BENCHMARKS_PATH = `${REPO_ROOT}/docs/benchmarks.md`;
 
 function gitCommitHash(): string {
   try {
@@ -26,23 +26,63 @@ yourself with \`pnpm --filter @shardis/benchmarks bench:<name>\` (build
 benchmark measures and why.
 `;
 
-function ensureFileExists(): void {
-  if (!existsSync(BENCHMARKS_PATH)) {
-    writeFileSync(BENCHMARKS_PATH, FILE_HEADER);
+// Inserts a row into its own "## <heading>" section, wherever that section
+// falls in the file - never just at EOF. A plain append would land a row
+// under whichever section happens to be *last in the file*, not the one it
+// actually belongs to, the moment more than one section exists.
+export function appendBenchmarkRowTo(
+  filePath: string,
+  heading: string,
+  columns: string[],
+  values: (string | number)[]
+): void {
+  const allColumns = ["Date", "Commit", ...columns];
+  const row = `| ${timestamp()} | ${gitCommitHash()} | ${values.join(" | ")} |`;
+
+  // Normalize CRLF -> LF before splitting: this file gets checked out with
+  // CRLF line endings on Windows (core.autocrlf), and without this an exact
+  // "## Heading" match against a "## Heading\r" line silently fails,
+  // making every section look missing and duplicating it on each run.
+  const rawContent = existsSync(filePath) ? readFileSync(filePath, "utf8") : FILE_HEADER;
+  const content = rawContent.replace(/\r\n/g, "\n");
+  const lines = content.split("\n");
+
+  const headingLine = `## ${heading}`;
+  const sectionStart = lines.findIndex((line) => line === headingLine);
+
+  if (sectionStart === -1) {
+    // New section: header, column row, separator row, data row.
+    const table = [
+      "",
+      headingLine,
+      "",
+      `| ${allColumns.join(" | ")} |`,
+      `| ${allColumns.map(() => "---").join(" | ")} |`,
+      row,
+      ""
+    ];
+    writeFileSync(filePath, [...lines, ...table].join("\n"));
+    return;
   }
-}
 
-function ensureSection(heading: string, columns: string[]): void {
-  const content = readFileSync(BENCHMARKS_PATH, "utf8");
-  if (content.includes(`## ${heading}`)) return;
+  // Find where this section ends: the next "## " heading, or EOF.
+  let sectionEnd = lines.length;
+  for (let i = sectionStart + 1; i < lines.length; i += 1) {
+    if (lines[i].startsWith("## ")) {
+      sectionEnd = i;
+      break;
+    }
+  }
 
-  const table = `\n## ${heading}\n\n| ${columns.join(" | ")} |\n| ${columns.map(() => "---").join(" | ")} |\n`;
-  appendFileSync(BENCHMARKS_PATH, table);
+  // Insert right before the first blank line that trails the section's
+  // existing content (i.e. just after its last table row).
+  let insertAt = sectionEnd;
+  while (insertAt > sectionStart && lines[insertAt - 1].trim() === "") insertAt -= 1;
+
+  const next = [...lines.slice(0, insertAt), row, ...lines.slice(insertAt)];
+  writeFileSync(filePath, next.join("\n"));
 }
 
 export function appendBenchmarkRow(heading: string, columns: string[], values: (string | number)[]): void {
-  ensureFileExists();
-  ensureSection(heading, ["Date", "Commit", ...columns]);
-  const row = `| ${timestamp()} | ${gitCommitHash()} | ${values.join(" | ")} |\n`;
-  appendFileSync(BENCHMARKS_PATH, row);
+  appendBenchmarkRowTo(DEFAULT_BENCHMARKS_PATH, heading, columns, values);
 }

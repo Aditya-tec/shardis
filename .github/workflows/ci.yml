@@ -34,8 +34,10 @@ jobs:
           pnpm --filter @shardis/cli build
           pnpm --filter @shardis/cli test
 
-      - name: Type-check benchmarks
-        run: pnpm --filter @shardis/benchmarks lint
+      - name: Type-check and test benchmarks
+        run: |
+          pnpm --filter @shardis/benchmarks lint
+          pnpm --filter @shardis/benchmarks test
 
       - name: Build dashboard
         run: pnpm --filter @shardis/dashboard build
