@@ -4,12 +4,14 @@ import { Console } from "../components/Console";
 import { EventFeed } from "../components/EventFeed";
 import { HashRing } from "../components/HashRing";
 import { NodeTable } from "../components/NodeTable";
+import { useClusterTopology } from "../lib/useClusterTopology";
 import { useEventFeed } from "../lib/useEventFeed";
 import { useNodeMetrics } from "../lib/useNodeMetrics";
 
 export default function DashboardPage() {
-  const statuses = useNodeMetrics();
-  const events = useEventFeed();
+  const { nodes, shards } = useClusterTopology();
+  const statuses = useNodeMetrics(nodes);
+  const events = useEventFeed(nodes);
 
   return (
     <main className="page">
@@ -59,18 +61,18 @@ export default function DashboardPage() {
       <div className="grid">
         <div className="panel">
           <h2>Hash ring</h2>
-          <HashRing statuses={statuses} />
+          <HashRing statuses={statuses} shards={shards} />
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           <div className="panel" id="console">
             <h2>Nodes</h2>
-            <NodeTable statuses={statuses} />
+            <NodeTable statuses={statuses} nodes={nodes} />
           </div>
 
           <div className="panel">
             <h2>Console</h2>
-            <Console statuses={statuses} />
+            <Console statuses={statuses} nodes={nodes} shards={shards} />
           </div>
 
           <div className="panel">

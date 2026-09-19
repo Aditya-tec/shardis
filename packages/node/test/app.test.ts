@@ -34,6 +34,7 @@ function testConfig(overrides: Partial<NodeConfig> = {}): NodeConfig {
     heartbeatIntervalMs: 1000,
     heartbeatTimeoutMs: 3000,
     rateLimitRps: 50,
+    maxConnectionsPerIp: 20,
     maxKeyBytes: 1024,
     maxValueBytes: 65536,
     publicDemo: false,
@@ -335,6 +336,33 @@ describe("app WS protocol", () => {
     capApp.close();
     await new Promise<void>((resolve) => capApp.server.close(() => resolve()));
   }, 15000);
+
+  it("MAX_CONNECTIONS_PER_IP config caps concurrent connections from one address", async () => {
+    // Set limit to 2 so we can test rejection without opening many sockets.
+    const { url: capUrl, app: capApp } = await startApp({ maxConnectionsPerIp: 2 });
+    const sockets: WebSocket[] = [];
+    try {
+      // First two connections are allowed.
+      for (let i = 0; i < 2; i++) {
+        sockets.push(await connect(capUrl));
+      }
+      // Third connection from the same IP (127.0.0.1) must be rejected.
+      const rejected = new WebSocket(capUrl);
+      await new Promise<void>((resolve, reject) => {
+        rejected.once("close", (code) => {
+          expect(code).toBe(1013);
+          resolve();
+        });
+        rejected.once("error", () => resolve()); // ws may error before close
+        setTimeout(reject, 2000);
+      });
+    } finally {
+      for (const s of sockets) s.close();
+      capApp.wss.close();
+      capApp.close();
+      await new Promise<void>((resolve) => capApp.server.close(() => resolve()));
+    }
+  });
 
   it("without PUBLIC_DEMO, writes succeed with no write_key at all (local/CI stay open)", async () => {
     socket.send(JSON.stringify({ id: "1", op: "SET", key: "foo", value: "bar" }));

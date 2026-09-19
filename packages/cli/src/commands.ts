@@ -73,14 +73,20 @@ export function parseCommandTokens(tokens: string[]): ShardisRequest | null {
       if (args.length < 2) throw new CommandError("usage: EXPIRE <key> <ttl_ms>");
       return { op, key: args[0], ttl_ms: parseTtl(args[1]) };
     }
+    case "TTL": {
+      if (args.length < 1) throw new CommandError("usage: TTL <key>");
+      return { op, key: args[0] };
+    }
     case "SUBSCRIBE":
     case "UNSUBSCRIBE": {
       if (args.length < 1) throw new CommandError(`usage: ${op} <channel>`);
       return { op, channel: args[0] };
     }
     case "PUBLISH": {
-      if (args.length < 2) throw new CommandError("usage: PUBLISH <channel> <message>");
-      return { op, channel: args[0], message: args.slice(1).join(" ") };
+      if (args.length < 2) throw new CommandError("usage: PUBLISH <channel> <message> [--cluster]");
+      const cluster = args.includes("--cluster");
+      const messageArgs = args.filter((a) => a !== "--cluster");
+      return { op, channel: messageArgs[0], message: messageArgs.slice(1).join(" "), scope: cluster ? "cluster" : undefined };
     }
     default:
       throw new CommandError(`unknown command: ${rawOp}`);

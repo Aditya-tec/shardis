@@ -103,6 +103,16 @@ describe("Store", () => {
     expect(store.ttl("expiring")).toBeUndefined();
   });
 
+  it("keysInSlot / dumpSlot filter by the supplied slot function", () => {
+    const store = new Store();
+    store.set("a", "1");
+    store.set("b", "2");
+    store.set("c", "3");
+    const slotFn = (key: string) => (key === "b" ? 7 : 1);
+    expect(store.keysInSlot(7, slotFn)).toEqual(["b"]);
+    expect(store.dumpSlot(1, slotFn).map((e) => e.key).sort()).toEqual(["a", "c"]);
+  });
+
   it("has() respects expiry without leaving a lingering entry", () => {
     const store = new Store();
     store.set("foo", "bar", 100);

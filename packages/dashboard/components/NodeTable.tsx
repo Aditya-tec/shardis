@@ -1,7 +1,6 @@
 "use client";
 
-import { NODES } from "../lib/clusterConfig";
-import type { NodeStatus } from "../lib/types";
+import type { NodeDescriptor, NodeStatus } from "../lib/types";
 
 function formatUptime(seconds: number | null): string {
   if (seconds === null) return "-";
@@ -16,7 +15,13 @@ function StatusBadge({ status }: { status: NodeStatus }) {
   return <span className="badge follower">follower</span>;
 }
 
-export function NodeTable({ statuses }: { statuses: Record<string, NodeStatus> }) {
+export function NodeTable({
+  statuses,
+  nodes
+}: {
+  statuses: Record<string, NodeStatus>;
+  nodes: NodeDescriptor[];
+}) {
   return (
     <table>
       <thead>
@@ -33,7 +38,7 @@ export function NodeTable({ statuses }: { statuses: Record<string, NodeStatus> }
         </tr>
       </thead>
       <tbody>
-        {NODES.map((node) => {
+        {nodes.map((node) => {
           const status = statuses[node.id];
           return (
             <tr key={node.id}>

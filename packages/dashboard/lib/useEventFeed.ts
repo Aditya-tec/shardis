@@ -1,13 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { NODES } from "./clusterConfig";
-import type { LiveEvent } from "./types";
+import type { LiveEvent, NodeDescriptor } from "./types";
 
 const MAX_EVENTS = 300;
 const RECONNECT_DELAY_MS = 2000;
 
-export function useEventFeed(): LiveEvent[] {
+export function useEventFeed(nodes: NodeDescriptor[]): LiveEvent[] {
   const [events, setEvents] = useState<LiveEvent[]>([]);
   const eventsRef = useRef<LiveEvent[]>([]);
 
@@ -54,13 +53,13 @@ export function useEventFeed(): LiveEvent[] {
       });
     }
 
-    for (const node of NODES) connect(node.id, node.wsUrl);
+    for (const node of nodes) connect(node.id, node.wsUrl);
 
     return () => {
       stopped = true;
       for (const socket of sockets) socket.close();
     };
-  }, []);
+  }, [nodes]);
 
   return events;
 }

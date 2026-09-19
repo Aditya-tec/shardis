@@ -16,9 +16,12 @@ the tests, not in pretending to be a production Redis replacement.
 - AOF durability with `fsync` before acknowledgements, snapshots, replay, and
   crash recovery.
 - Redis CRC16 hash slots across fixed shard ranges, including hash tags.
+- Live slot migration (`reshard`) with `ASK` / `MOVED` redirects.
 - JSON WebSocket protocol by default, plus an opt-in compact binary protocol.
-- `MOVED` redirects for cross-shard requests and follower writes.
-- Pub/sub with disconnect cleanup and subscription limits.
+- `MOVED` redirects for cross-shard requests and follower writes; `ASK`
+  during mid-migration slots.
+- Pub/sub with disconnect cleanup and subscription limits (sharded by
+  default; optional `scope: "cluster"`).
 - Deterministic failover by default, based on the lowest live node id.
 - Cross-shard leader gossip so redirects follow live failover state.
 - Runtime follower membership through `JOIN_URL` and membership relay.
@@ -123,9 +126,20 @@ The new node sends `MEMBER_JOIN`; the recipient adds it, connects to it, and
 relays `MEMBER_ANNOUNCE` to known members. A graceful shutdown sends
 `MEMBER_LEAVE`. This changes only the follower set, never hash ownership.
 
-Shard ranges are static by design. Shardis does not currently rebalance or
-reshard live data; changing ownership requires an operator-managed topology
-change and data migration plan.
+## Resharding
+
+Slot ownership starts from the static ranges in `cluster.config.json`, then
+mutates at runtime. Operators move slots with:
+
+```bash
+node packages/cli/dist/shardis-cli.js --url ws://localhost:7001/ws reshard --to shard-b --slots 4096
+```
+
+Each slot goes through a Redis-Cluster-style `MIGRATING` / `IMPORTING` /
+`SLOT_OWNED` handshake. Clients that hit a mid-migration key get an `ASK`
+redirect (followed once by the CLI and dashboard, not cached like `MOVED`).
+Interrupted migrations stay visible via `/admin/slot-state` and resume with
+`--resume` rather than silently sticking forever.
 
 ## Configuration
 
@@ -145,15 +159,29 @@ the complete set. The most important values are:
 | `DATA_DIR` | AOF and snapshot directory | `./data/<NODE_ID>` |
 | `PUBLIC_DEMO` | Enable write-key protection | `false` |
 | `DEMO_WRITE_KEY` | Required key when public demo protection is enabled | unset |
+| `CLUSTER_SECRET` | Shared secret for peer replication/gossip auth | unset |
 | `MAX_CONNECTIONS_PER_IP` | Simultaneous WebSocket cap per source IP | `20` |
 
 ## HTTP endpoints
 
 - `GET /healthz` returns node id, shard, uptime, and current role.
 - `GET /metrics` returns key count, evictions, operation count, connected
-  peers, and replication lag.
-- WebSocket requests use `GET`, `SET`, `DEL`, `EXPIRE`, `SUBSCRIBE`,
+  peers, follower replication lag, per-follower lag / lagging flags, and
+  replication lag on followers.
+- `GET /topology` returns the cluster config this node loaded (used by the
+  dashboard when `NEXT_PUBLIC_BOOTSTRAP_NODE_URL` is set).
+- WebSocket requests use `GET`, `SET`, `DEL`, `EXPIRE`, `TTL`, `SUBSCRIBE`,
   `UNSUBSCRIBE`, and `PUBLISH`.
+
+## Pub/sub
+
+Default `PUBLISH` is **sharded pub/sub**: delivery is local to the node that
+received the publish (and its local subscribers). That matches per-partition
+messaging in real systems and is intentional, not an accident.
+
+Pass `scope: "cluster"` (CLI: `PUBLISH channel message --cluster`) to relay
+once over gossip to other shards, which then deliver to their own local
+subscribers.
 
 ## Transport security
 

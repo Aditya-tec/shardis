@@ -15,4 +15,9 @@ export class HashRing {
   shardForKey(key: string): ShardConfig {
     return this.shardForSlot(keySlot(key));
   }
+
+  /** Returns the CRC16 hash slot for a key (0–16383). */
+  slotForKey(key: string): number {
+    return keySlot(key);
+  }
 }

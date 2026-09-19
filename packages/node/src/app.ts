@@ -5,6 +5,7 @@ import type { NodeConfig } from "./config.js";
 import { Store } from "./engine/store.js";
 import { loadClusterConfig } from "./hashring/config.js";
 import { HashRing } from "./hashring/ring.js";
+import { keySlot } from "./hashring/hash.js";
 import { AofLog } from "./persistence/aof.js";
 import { applyAofEntries } from "./persistence/replay.js";
 import { loadSnapshot, writeSnapshotAtomic } from "./persistence/snapshot.js";
@@ -40,6 +41,10 @@ export interface App {
   // down timers/replication/AOF. Distinct from close(), which tests use
   // for immediate synchronous teardown without the drain sequence.
   shutdownGracefully: () => Promise<void>;
+  // Admin: migrate a slot from this shard to another. Only valid when this
+  // node is the leader of the slot's current owner. Returns the number of
+  // keys transferred.
+  migrateSlot: (slot: number, toShardId: string) => Promise<{ transferred: number }>;
 }
 
 export function createApp(config: NodeConfig, startedAt = Date.now()): App {
@@ -81,7 +86,10 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
     nodeId: config.nodeId,
     shards: clusterConfig.shards,
     heartbeatIntervalMs: config.heartbeatIntervalMs,
-    log
+    log,
+    clusterSecret: config.clusterSecret,
+    slotStatePath: join(config.dataDir, "slot-state.json"),
+    onPublishRelay: (channel, message) => pubsub.publish(channel, message)
   });
 
   const snapshotPath = join(config.dataDir, "snapshot.json");
@@ -127,6 +135,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
         nodeUrl: config.nodeUrl ?? `ws://127.0.0.1:${config.port}/ws`,
         joinUrl: config.joinUrl,
         log,
+        clusterSecret: config.clusterSecret,
         onFullSyncApplied: () => snapshotNow(),
         onLeaderChanged: (leaderId) => clusterGossip.announceOwnShardLeader(config.shardId, leaderId)
       });
@@ -153,7 +162,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
     // origin than each node), so they need CORS enabled to be readable
     // there at all. Writes only ever happen over the WS protocol, which
     // isn't subject to the same-origin fetch restriction in the first place.
-    if (req.url === "/healthz" || req.url === "/metrics") {
+    if (req.url === "/healthz" || req.url === "/metrics" || req.url === "/topology") {
       res.setHeader("Access-Control-Allow-Origin", "*");
     }
 
@@ -184,9 +193,84 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
           ops_total: opsTotal,
           connected_sockets: wss.clients.size,
           connected_peers: replication.getConnectedPeerIds().length,
-          replication_lag_ms: replication.isLeader() ? null : replication.getLastReplicationLagMs()
+          replication_lag_ms: replication.isLeader() ? null : replication.getLastReplicationLagMs(),
+          per_follower_lag_ms: replication.isLeader() ? replication.getPerFollowerLagMs() : null,
+          per_follower_lagging: replication.isLeader() ? replication.getPerFollowerLagging() : null
         })
       );
+      return;
+    }
+
+    // GET /topology — returns the static cluster config this node was started
+    // with. Used by the dashboard for dynamic topology discovery.
+    if (req.method === "GET" && req.url === "/topology") {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(clusterConfig));
+      return;
+    }
+
+    // GET /admin/slot-state — migrating/importing slots, used by `reshard --resume`.
+    if (req.method === "GET" && req.url === "/admin/slot-state") {
+      const state = clusterGossip.getSlotState();
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ...state, stuck: state.migrating.length > 0 }));
+      return;
+    }
+    // POST /admin/migrate-slot — initiate a slot migration from this shard.
+    // Body: { slot: number, toShard: string }
+    // Returns: { transferred: number } or an error object.
+    if (req.method === "POST" && req.url === "/admin/migrate-slot") {
+      let body = "";
+      req.on("data", (chunk) => { body += String(chunk); });
+      req.on("end", () => {
+        void (async () => {
+          try {
+            const { slot, toShard } = JSON.parse(body) as { slot: number; toShard: string };
+            if (typeof slot !== "number" || typeof toShard !== "string") {
+              res.writeHead(400, { "content-type": "application/json" });
+              res.end(JSON.stringify({ error: "slot (number) and toShard (string) are required" }));
+              return;
+            }
+            const result = await migrateSlot(slot, toShard);
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(JSON.stringify(result));
+          } catch (error) {
+            res.writeHead(500, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+          }
+        })();
+      });
+      return;
+    }
+
+    // POST /admin/receive-slot — accept keys being migrated into this shard.
+    // Body: { slot: number, fromShard: string, entries: SyncEntry[] }
+    // Called by the source shard's leader during slot migration.
+    if (req.method === "POST" && req.url === "/admin/receive-slot") {
+      let body = "";
+      req.on("data", (chunk) => { body += String(chunk); });
+      req.on("end", () => {
+        try {
+          const { slot, fromShard, entries } = JSON.parse(body) as {
+            slot: number;
+            fromShard: string;
+            entries: Array<{ key: string; value: string; expiresAt: number | null }>;
+          };
+          clusterGossip.beginSlotMigration(slot, fromShard, config.shardId);
+          for (const entry of entries) {
+            store.restoreSet(entry.key, entry.value, entry.expiresAt);
+            aofLog.append({ op: "SET", key: entry.key, value: entry.value, expiresAt: entry.expiresAt });
+            replication.afterLocalWrite({ op: "SET", key: entry.key, value: entry.value, expiresAt: entry.expiresAt });
+          }
+          log("slot_keys_received", { slot, fromShard, count: entries.length });
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ ok: true, received: entries.length }));
+        } catch (error) {
+          res.writeHead(500, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+        }
+      });
       return;
     }
 
@@ -207,7 +291,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
   // broker's channel map forever - each new channel name is a new Map
   // entry, not something the existing per-message rate limit bounds.
   const MAX_SUBSCRIPTIONS_PER_CONNECTION = 100;
-  const MAX_CONNECTIONS_PER_IP = 20;
+  const MAX_CONNECTIONS_PER_IP = config.maxConnectionsPerIp ?? 20;
   const connectionsByIp = new Map<string, number>();
 
   wss.on("connection", (socket: WebSocket) => {
@@ -281,7 +365,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
         }
 
         if (isStoreRequest(result.request)) {
-          const isWriteOp = result.request.op !== "GET";
+          const isWriteOp = result.request.op !== "GET" && result.request.op !== "TTL";
           if (shuttingDown && isWriteOp) {
             respond({ id: result.request.id, ok: false, error: "shutting_down" });
             return;
@@ -290,6 +374,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
           if (
             config.publicDemo &&
             result.request.op !== "GET" &&
+            result.request.op !== "TTL" &&
             !writeKeyValid(result.request.write_key, config.demoWriteKey)
           ) {
             log("client_rejected", { error: "write_key_required", op: result.request.op });
@@ -298,14 +383,19 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
           }
 
           const owningShard = ring.shardForKey(result.request.key);
-          if (owningShard.id !== config.shardId) {
-            log("moved_redirect", { key: result.request.key, shard: owningShard.id });
+          const slot = ring.slotForKey(result.request.key);
+          const runtimeShardId = clusterGossip.shardForSlot(slot) ?? owningShard.id;
+          const asking = result.request.asking === true;
+          const importingHere = clusterGossip.isSlotImportingTo(slot, config.shardId);
+
+          if (runtimeShardId !== config.shardId && !asking && !importingHere) {
+            log("moved_redirect", { key: result.request.key, shard: runtimeShardId });
             respond({
               id: result.request.id,
               ok: false,
               error: "MOVED",
-              shard: owningShard.id,
-              leader: clusterGossip.getCurrentLeaderUrl(owningShard.id) ?? owningShard.leader.url
+              shard: runtimeShardId,
+              leader: clusterGossip.getCurrentLeaderUrl(runtimeShardId) ?? owningShard.leader.url
             });
             return;
           }
@@ -320,6 +410,24 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
               leader: replication.getCurrentLeaderUrl()
             });
             return;
+          }
+
+          // ASK only from the slot's current source, and never when the client
+          // is already following an ASK (that would loop with the destination).
+          if (!asking && clusterGossip.isSlotMigratingFrom(slot, config.shardId)) {
+            const destUrl = clusterGossip.migrationDestUrl(slot);
+            if (destUrl) {
+              if (isWriteOp) {
+                log("ask_redirect", { key: result.request.key, slot, reason: "migrating_write" });
+                respond({ id: result.request.id, ok: false, error: "ASK", shard: runtimeShardId, leader: destUrl });
+                return;
+              }
+              if (!store.has(result.request.key)) {
+                log("ask_redirect", { key: result.request.key, slot, reason: "migrating_read_not_found" });
+                respond({ id: result.request.id, ok: false, error: "ASK", shard: runtimeShardId, leader: destUrl });
+                return;
+              }
+            }
           }
 
           const aofEntry = entryForRequest(result.request, Date.now);
@@ -367,6 +475,9 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
         const response = dispatchPubSub(result.request, pubsub, subscriber);
         if (result.request.op === "SUBSCRIBE") subscribedChannels.add(result.request.channel);
         if (result.request.op === "UNSUBSCRIBE") subscribedChannels.delete(result.request.channel);
+        if (result.request.op === "PUBLISH" && result.request.scope === "cluster") {
+          clusterGossip.relayPublish(result.request.channel, result.request.message);
+        }
         log("pubsub_event", { op: result.request.op, channel: result.request.channel });
         respond(response);
       } catch (error) {
@@ -433,6 +544,58 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
     closeInternal();
   }
 
+  // Migrate a single slot from this shard to `toShardId`.
+  // 1. Gossip SLOT_MIGRATING + SLOT_IMPORTING so all nodes issue ASK redirects.
+  // 2. Collect keys in the slot from the local store.
+  // 3. POST those keys to the destination shard's leader via /admin/receive-slot.
+  // 4. Delete keys locally and gossip SLOT_OWNED to finalize routing.
+  // Idempotent if called when no keys exist for the slot.
+  async function migrateSlot(slot: number, toShardId: string): Promise<{ transferred: number }> {
+    const migrating = clusterGossip.getMigratingSlots().find((entry) => entry.slot === slot);
+    const currentOwner = clusterGossip.shardForSlot(slot) ?? config.shardId;
+    if (currentOwner === toShardId && !migrating) {
+      return { transferred: 0 };
+    }
+    if (currentOwner !== config.shardId && migrating?.fromShard !== config.shardId) {
+      throw new Error(`slot ${slot} is owned by ${currentOwner}, not this shard (${config.shardId})`);
+    }
+    if (!replication.isLeader()) {
+      throw new Error("slot migration must be initiated from the shard leader");
+    }
+
+    const destLeaderUrl = clusterGossip.getCurrentLeaderUrl(toShardId);
+    if (!destLeaderUrl) throw new Error(`no known leader URL for destination shard ${toShardId}`);
+
+    const destHttpUrl = destLeaderUrl.replace(/^ws(s?):\/\//, (_, s: string) => `http${s}://`).replace(/\/ws$/, "");
+
+    clusterGossip.beginSlotMigration(slot, config.shardId, toShardId);
+
+    const entries = store.dumpSlot(slot, keySlot);
+
+    log("slot_migration_transferring", { slot, toShard: toShardId, keys: entries.length });
+
+    const resp = await fetch(`${destHttpUrl}/admin/receive-slot`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ slot, fromShard: config.shardId, entries })
+    });
+    if (!resp.ok) {
+      const err = await resp.text();
+      throw new Error(`receive-slot failed: ${err}`);
+    }
+
+    const keys = entries.map((entry) => entry.key);
+    for (const key of keys) {
+      store.del(key);
+      aofLog.append({ op: "DEL", key });
+      replication.afterLocalWrite({ op: "DEL", key });
+    }
+
+    clusterGossip.finalizeSlotMigration(slot, toShardId);
+    log("slot_migration_done", { slot, toShard: toShardId, transferred: keys.length });
+    return { transferred: keys.length };
+  }
+
   return {
     server,
     wss,
@@ -445,6 +608,7 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
     log,
     snapshotNow,
     close: closeInternal,
-    shutdownGracefully
+    shutdownGracefully,
+    migrateSlot
   };
 }

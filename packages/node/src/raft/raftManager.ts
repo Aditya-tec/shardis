@@ -74,6 +74,19 @@ export class RaftManager implements ReplicationController {
   }
   getConnectedPeerIds(): string[] { return [...this.peerState].filter(([, peer]) => peer.socket?.readyState === WebSocket.OPEN).map(([id]) => id); }
   getLastReplicationLagMs(): number | null { return this.lastLag; }
+  // Raft uses matchIndex rather than ACK timestamps; per-follower lag is not
+  // tracked here — return null for all connected peers.
+  getPerFollowerLagMs(): Record<string, number | null> {
+    const result: Record<string, number | null> = {};
+    for (const [id, peer] of this.peerState) {
+      if (peer.socket?.readyState === WebSocket.OPEN) result[id] = null;
+    }
+    return result;
+  }
+
+  getPerFollowerLagging(): Record<string, boolean> {
+    return {}; // backpressure not tracked in Raft mode
+  }
 
   start(): void {
     for (const peer of this.peerState.values()) this.connect(peer);
@@ -201,7 +214,16 @@ export class RaftManager implements ReplicationController {
   private broadcastAppend(): void {
     if (!this.isLeader()) return;
     for (const peer of this.peerState.values()) {
-      this.send(peer.socket, { type: "RAFT_APPEND_ENTRIES", term: this.term, leaderId: this.nodeId, prevLogIndex: this.log.lastIndex - this.log.slice(peer.matchIndex + 1).length, prevLogTerm: peer.matchIndex < 0 ? 0 : this.log.at(peer.matchIndex)?.term ?? 0, entries: this.log.slice(peer.matchIndex + 1), leaderCommit: this.commitIndex });
+      const { prevLogIndex, prevLogTerm, entries } = appendEntriesForPeer(peer.matchIndex, this.log);
+      this.send(peer.socket, {
+        type: "RAFT_APPEND_ENTRIES",
+        term: this.term,
+        leaderId: this.nodeId,
+        prevLogIndex,
+        prevLogTerm,
+        entries,
+        leaderCommit: this.commitIndex
+      });
     }
   }
 
@@ -241,4 +263,20 @@ export function isLogUpToDate(candidateIndex: number, candidateTerm: number, loc
 
 export function electionTimeoutMs(heartbeatTimeoutMs: number, random = Math.random()): number {
   return Math.floor(heartbeatTimeoutMs * (0.5 + random * 0.5));
+}
+
+// prevLogIndex is peer.matchIndex by definition (nextIndex = matchIndex+1,
+// so the entry just before what we're sending is at matchIndex). Deriving it
+// indirectly from slice length is fragile - use matchIndex directly.
+// prevLogTerm is 0 when matchIndex < 0 (empty follower log / no previous entry).
+export function appendEntriesForPeer(matchIndex: number, log: RaftLog): {
+  prevLogIndex: number;
+  prevLogTerm: number;
+  entries: ReturnType<RaftLog["slice"]>;
+} {
+  return {
+    prevLogIndex: matchIndex,
+    prevLogTerm: matchIndex < 0 ? 0 : (log.termAt(matchIndex) ?? 0),
+    entries: log.slice(matchIndex + 1)
+  };
 }

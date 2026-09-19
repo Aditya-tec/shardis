@@ -11,6 +11,8 @@ export interface ShardisRequest {
   channel?: string;
   message?: string;
   write_key?: string;
+  asking?: boolean;
+  scope?: "local" | "cluster";
 }
 
 export interface ShardisResponse {
@@ -82,6 +84,20 @@ export class ShardisClient {
       }
       await this.reconnect(response.leader);
       return this.send(request, hops + 1);
+    }
+
+    // ASK: follow this single request to the given leader WITHOUT caching it
+    // as the new permanent URL (the slot is mid-migration; MOVED will come
+    // once the slot fully transfers). We use a one-shot connection so the
+    // main socket stays pointed at the original shard.
+    if (!response.ok && response.error === "ASK" && typeof response.leader === "string" && !request.asking) {
+      const askClient = new ShardisClient(response.leader, undefined, this.binary);
+      try {
+        await askClient.connect();
+        return await askClient.send({ ...request, asking: true }, hops);
+      } finally {
+        askClient.close();
+      }
     }
 
     return response;

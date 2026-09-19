@@ -44,4 +44,25 @@ describe("dispatch", () => {
       updated: false
     });
   });
+
+  it("TTL returns remaining ms, null for no expiry, and not_found for missing keys", () => {
+    const store = new Store({ now: () => 1000 });
+    store.set("forever", "x");
+    store.set("timed", "y", 500);
+    expect(dispatch({ id: "1", op: "TTL", key: "forever" }, store)).toEqual({
+      id: "1",
+      ok: true,
+      ttl_ms: null
+    });
+    expect(dispatch({ id: "2", op: "TTL", key: "timed" }, store)).toEqual({
+      id: "2",
+      ok: true,
+      ttl_ms: 500
+    });
+    expect(dispatch({ id: "3", op: "TTL", key: "missing" }, store)).toEqual({
+      id: "3",
+      ok: false,
+      error: "not_found"
+    });
+  });
 });

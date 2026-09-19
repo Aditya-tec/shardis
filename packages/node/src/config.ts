@@ -14,11 +14,14 @@ export interface NodeConfig {
   heartbeatIntervalMs: number;
   heartbeatTimeoutMs: number;
   rateLimitRps: number;
-  maxConnectionsPerIp?: number;
+  maxConnectionsPerIp: number;
   maxKeyBytes: number;
   maxValueBytes: number;
   publicDemo: boolean;
   demoWriteKey: string | undefined;
+  // When set, all peer connections (replication + gossip) must present this
+  // secret in PEER_HELLO / SHARD_LEADER_ANNOUNCE to be accepted.
+  clusterSecret: string | undefined;
 }
 
 function requireEnv(name: string, fallback?: string): string {
@@ -71,6 +74,7 @@ export function loadConfig(): NodeConfig {
     maxKeyBytes: intEnv("MAX_KEY_BYTES", 1024),
     maxValueBytes: intEnv("MAX_VALUE_BYTES", 65536),
     publicDemo: (process.env.PUBLIC_DEMO ?? "false") === "true",
-    demoWriteKey: process.env.DEMO_WRITE_KEY
+    demoWriteKey: process.env.DEMO_WRITE_KEY,
+    clusterSecret: process.env.CLUSTER_SECRET
   };
 }

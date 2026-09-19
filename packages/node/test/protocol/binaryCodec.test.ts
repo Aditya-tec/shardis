@@ -44,6 +44,10 @@ describe("binaryCodec request round-trip", () => {
     roundTripRequest({ id: "1", op: "EXPIRE", key: "foo", ttl_ms: 2000 });
   });
 
+  it("TTL", () => {
+    roundTripRequest({ id: "1", op: "TTL", key: "foo" });
+  });
+
   it("SUBSCRIBE", () => {
     roundTripRequest({ id: "1", op: "SUBSCRIBE", channel: "events" });
   });
@@ -116,6 +120,11 @@ describe("binaryCodec response round-trip", () => {
 
   it("GET miss (value explicitly null, not absent)", () => {
     roundTripOk({ id: "1", ok: true, value: null });
+  });
+
+  it("TTL remaining ms and null (no expiry)", () => {
+    roundTripOk({ id: "1", ok: true, ttl_ms: 5000 });
+    roundTripOk({ id: "2", ok: true, ttl_ms: null });
   });
 
   it("DEL response", () => {

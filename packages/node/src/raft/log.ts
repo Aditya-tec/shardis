@@ -12,6 +12,9 @@ export class RaftLog {
   get lastIndex(): number { return this.entries.length - 1; }
   get lastTerm(): number { return this.entries.length === 0 ? 0 : this.entries[this.entries.length - 1].term; }
   at(index: number): RaftLogEntry | undefined { return this.entries[index]; }
+  // Returns the term of the entry at `index`, or undefined if the index is
+  // out of bounds. Used to compute prevLogTerm without optional-chaining noise.
+  termAt(index: number): number | undefined { return this.entries[index]?.term; }
   append(entries: RaftLogEntry[]): void { this.entries.push(...entries); }
   truncateFrom(index: number): void { this.entries.splice(index); }
   slice(index: number): RaftLogEntry[] { return this.entries.slice(index); }

@@ -5,7 +5,7 @@ export interface SyncEntry {
 }
 
 export type PeerMessage =
-  | { type: "PEER_HELLO"; nodeId: string; shardId: string }
+  | { type: "PEER_HELLO"; nodeId: string; shardId: string; clusterSecret?: string }
   | { type: "MEMBER_JOIN"; nodeId: string; shardId: string; url: string }
   | { type: "MEMBER_ANNOUNCE"; nodeId: string; shardId: string; url: string }
   | { type: "MEMBER_LEAVE"; nodeId: string; shardId: string }

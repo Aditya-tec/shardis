@@ -299,4 +299,73 @@ describe("replication + heartbeat-based failover (real 3-node shard)", () => {
     leaderSocket.close();
     followerSocketSecond.close();
   }, 30000);
+
+  // P0-3: Follower fsync guarantee — once a follower has applied an op and
+  // that op is visible via GET, a SIGKILL followed by restart must not lose it.
+  // aofLog.append() calls fsyncSync synchronously before returning, so by the
+  // time REPL_ACK is sent the data is durably on disk.
+  it("a follower that acknowledges a write retains it through SIGKILL+restart (fsync before REPL_ACK)", async () => {
+    const leader: NodeSpec = { id: "node-a1", port: randomPort() };
+    const follower: NodeSpec = { id: "node-a2", port: randomPort() };
+
+    dataDir = mkdtempSync(join(tmpdir(), "shardis-fsync-data-"));
+    const configDir = mkdtempSync(join(tmpdir(), "shardis-fsync-config-"));
+    clusterConfigPath = join(configDir, "cluster.json");
+    writeFileSync(
+      clusterConfigPath,
+      JSON.stringify({
+        shards: [{
+          id: "shard-a",
+          hash_range: [0, 16383],
+          leader: { id: leader.id, url: nodeUrl(leader.port) },
+          followers: [{ id: follower.id, url: nodeUrl(follower.port) }]
+        }]
+      })
+    );
+
+    children = [
+      spawnNode(leader, clusterConfigPath, dataDir),
+      spawnNode(follower, clusterConfigPath, dataDir),
+    ];
+
+    const leaderSocket = await connectWithRetry(nodeUrl(leader.port));
+
+    // Write a known key on the leader and wait until it's visible on the
+    // follower — that means the follower has applied the REPL_OP (and therefore
+    // fsynced it to its AOF) before we kill it.
+    expect(await send(leaderSocket, { id: "1", op: "SET", key: "durable-key", value: "durable-value" }))
+      .toEqual({ id: "1", ok: true });
+
+    let followerSocket: WebSocket | null = null;
+    await waitUntil(
+      async () => {
+        if (!followerSocket) followerSocket = await connectWithRetry(nodeUrl(follower.port));
+        const response = await send(followerSocket, { id: "chk", op: "GET", key: "durable-key" });
+        return response.value === "durable-value" ? true : null;
+      },
+      5000,
+      "write to replicate to follower"
+    );
+    followerSocket?.close();
+    followerSocket = null;
+
+    // Kill the follower hard — no graceful flush, just SIGKILL.
+    const followerProcess = children[1];
+    children = [children[0]];
+    followerProcess.kill("SIGKILL");
+    await new Promise<void>((resolve) => followerProcess.once("exit", () => resolve()));
+
+    // Restart the follower against the SAME data dir (no leader help needed —
+    // the op must already be in the follower's own AOF from before the kill).
+    const restartedFollower = spawnNode(follower, clusterConfigPath, dataDir);
+    children = [children[0], restartedFollower];
+    const restartedSocket = await connectWithRetry(nodeUrl(follower.port));
+
+    const response = await send(restartedSocket, { id: "2", op: "GET", key: "durable-key" });
+    // The op was fsync'd before REPL_ACK was sent, so it must survive the kill.
+    expect(response.value).toBe("durable-value");
+
+    leaderSocket.close();
+    restartedSocket.close();
+  }, 30000);
 });

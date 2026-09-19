@@ -6,7 +6,9 @@ yourself with `pnpm --filter @shardis/benchmarks bench:<name>` (build
 `@shardis/node` first). See `docs/architecture.md` for what each
 benchmark measures and why.
 
-## Rebalance
+## Rebalance (naive re-bootstrap — NOT production-realistic; see Reshard below for real mechanism)
+
+> **Note:** These numbers reflect a full range recompute from scratch (discard all slot assignments, redivide evenly). This is what a re-bootstrap looks like, not a live `redis-cli --cluster reshard`-style migration. The ~50% figure is expected for contiguous range repartitioning and is not a bug. The Reshard section below shows the production-realistic mechanism with explicit slot migration.
 
 | Date | Commit | Scenario | Shards (before -> after) | Sample size | Keys moved | Moved % | Virtual-node textbook % |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -14,6 +16,13 @@ benchmark measures and why.
 | 2026-09-18T06:23:41.247Z | d0c35ad | remove | 3 -> 2 | 10000 | 4987 | 49.87% | 50.00% |
 | 2026-09-18T07:38:43.235Z | f0cab07 | add | 3 -> 4 | 10000 | 5015 | 50.15% | 25.00% |
 | 2026-09-18T07:39:46.382Z | f0cab07 | remove | 3 -> 2 | 10000 | 4987 | 49.87% | 50.00% |
+
+## Reshard (live slot migration — production-realistic, zero client failures expected)
+
+Live slot-by-slot migration with a concurrent write client. Only transient `ASK` redirects are acceptable; hard failures = 0 is the pass criterion. Run with `pnpm --filter @shardis/benchmarks bench:reshard`.
+
+| Date | Commit | Slots moved | Requested % | Actual % | Keys transferred | Migration ms | Client ok | ASK redirects | Hard failures |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 
 ## Throughput
 

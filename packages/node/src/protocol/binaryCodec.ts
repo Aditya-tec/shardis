@@ -21,7 +21,8 @@ const OPCODES: Record<RequestOp, number> = {
   EXPIRE: 4,
   SUBSCRIBE: 5,
   UNSUBSCRIBE: 6,
-  PUBLISH: 7
+  PUBLISH: 7,
+  TTL: 8
 };
 const OPCODE_TO_OP = new Map<number, RequestOp>(Object.entries(OPCODES).map(([op, code]) => [code, op as RequestOp]));
 
@@ -37,6 +38,7 @@ const BIT_UPDATED = 1 << 2;
 const BIT_SUBSCRIBED = 1 << 3;
 const BIT_UNSUBSCRIBED = 1 << 4;
 const BIT_DELIVERED = 1 << 5;
+const BIT_TTL = 1 << 6;
 
 class BufferWriter {
   private readonly chunks: Buffer[] = [];
@@ -131,18 +133,26 @@ export function encodeRequest(request: Request): Buffer {
         w.writeUInt8(0);
       }
       w.writeString(request.write_key ?? "");
+      w.writeUInt8(request.asking ? 1 : 0);
       break;
     case "GET":
       w.writeString(request.key);
+      w.writeUInt8(request.asking ? 1 : 0);
       break;
     case "DEL":
       w.writeString(request.key);
       w.writeString(request.write_key ?? "");
+      w.writeUInt8(request.asking ? 1 : 0);
       break;
     case "EXPIRE":
       w.writeString(request.key);
       w.writeDoubleBE(request.ttl_ms);
       w.writeString(request.write_key ?? "");
+      w.writeUInt8(request.asking ? 1 : 0);
+      break;
+    case "TTL":
+      w.writeString(request.key);
+      w.writeUInt8(request.asking ? 1 : 0);
       break;
     case "SUBSCRIBE":
     case "UNSUBSCRIBE":
@@ -152,6 +162,7 @@ export function encodeRequest(request: Request): Buffer {
       w.writeString(request.channel);
       w.writeString(request.message);
       w.writeString(request.write_key ?? "");
+      w.writeString(request.scope ?? "local");
       break;
   }
 
@@ -183,30 +194,41 @@ export function decodeRequest(buf: Buffer, limits: ParseLimits): ParseResult {
       const hasTtl = r.readUInt8();
       const ttl_ms = hasTtl ? r.readDoubleBE() : undefined;
       const write_key = r.readString();
+      const askingFlag = r.readUInt8() === 1 ? true : undefined;
       if (keyTooLarge(key, limits.maxKeyBytes)) return err(id, "key_too_large");
       if (valueTooLarge(value, limits.maxValueBytes)) return err(id, "value_too_large");
-      return { ok: true, request: { id, op, key, value, ttl_ms, write_key: write_key || undefined } };
+      return { ok: true, request: { id, op, key, value, ttl_ms, write_key: write_key || undefined, asking: askingFlag } };
     }
 
     if (op === "GET") {
       const key = r.readString();
+      const askingFlag = r.readUInt8() === 1 ? true : undefined;
       if (keyTooLarge(key, limits.maxKeyBytes)) return err(id, "key_too_large");
-      return { ok: true, request: { id, op, key } };
+      return { ok: true, request: { id, op, key, asking: askingFlag } };
     }
 
     if (op === "DEL") {
       const key = r.readString();
       const write_key = r.readString();
+      const askingFlag = r.readUInt8() === 1 ? true : undefined;
       if (keyTooLarge(key, limits.maxKeyBytes)) return err(id, "key_too_large");
-      return { ok: true, request: { id, op, key, write_key: write_key || undefined } };
+      return { ok: true, request: { id, op, key, write_key: write_key || undefined, asking: askingFlag } };
     }
 
     if (op === "EXPIRE") {
       const key = r.readString();
       const ttl_ms = r.readDoubleBE();
       const write_key = r.readString();
+      const askingFlag = r.readUInt8() === 1 ? true : undefined;
       if (keyTooLarge(key, limits.maxKeyBytes)) return err(id, "key_too_large");
-      return { ok: true, request: { id, op, key, ttl_ms, write_key: write_key || undefined } };
+      return { ok: true, request: { id, op, key, ttl_ms, write_key: write_key || undefined, asking: askingFlag } };
+    }
+
+    if (op === "TTL") {
+      const key = r.readString();
+      const askingFlag = r.readUInt8() === 1 ? true : undefined;
+      if (keyTooLarge(key, limits.maxKeyBytes)) return err(id, "key_too_large");
+      return { ok: true, request: { id, op, key, asking: askingFlag } };
     }
 
     if (op === "SUBSCRIBE" || op === "UNSUBSCRIBE") {
@@ -219,9 +241,11 @@ export function decodeRequest(buf: Buffer, limits: ParseLimits): ParseResult {
     const channel = r.readString();
     const message = r.readString();
     const write_key = r.readString();
+    const scopeRaw = r.readString();
+    const scope = scopeRaw === "cluster" ? "cluster" as const : undefined;
     if (keyTooLarge(channel, limits.maxKeyBytes)) return err(id, "channel_too_large");
     if (valueTooLarge(message, limits.maxValueBytes)) return err(id, "message_too_large");
-    return { ok: true, request: { id, op, channel, message, write_key: write_key || undefined } };
+    return { ok: true, request: { id, op, channel, message, write_key: write_key || undefined, scope } };
   } catch {
     return err(id, "malformed_binary_message");
   }
@@ -257,6 +281,7 @@ export function encodeResponse(response: Response): Buffer {
   if (response.subscribed !== undefined) bits |= BIT_SUBSCRIBED;
   if (response.unsubscribed !== undefined) bits |= BIT_UNSUBSCRIBED;
   if (response.delivered !== undefined) bits |= BIT_DELIVERED;
+  if (response.ttl_ms !== undefined) bits |= BIT_TTL;
   w.writeUInt8(bits);
 
   if (response.value !== undefined) {
@@ -268,6 +293,10 @@ export function encodeResponse(response: Response): Buffer {
   if (response.subscribed !== undefined) w.writeUInt8(response.subscribed ? 1 : 0);
   if (response.unsubscribed !== undefined) w.writeUInt8(response.unsubscribed ? 1 : 0);
   if (response.delivered !== undefined) w.writeUInt32BE(response.delivered);
+  if (response.ttl_ms !== undefined) {
+    w.writeUInt8(response.ttl_ms === null ? 0 : 1);
+    if (response.ttl_ms !== null) w.writeDoubleBE(response.ttl_ms);
+  }
 
   return w.toBuffer();
 }
@@ -302,5 +331,9 @@ export function decodeResponse(buf: Buffer): Response {
   if (bits & BIT_SUBSCRIBED) response.subscribed = r.readUInt8() === 1;
   if (bits & BIT_UNSUBSCRIBED) response.unsubscribed = r.readUInt8() === 1;
   if (bits & BIT_DELIVERED) response.delivered = r.readUInt32BE();
+  if (bits & BIT_TTL) {
+    const hasTtl = r.readUInt8();
+    response.ttl_ms = hasTtl ? r.readDoubleBE() : null;
+  }
   return response;
 }

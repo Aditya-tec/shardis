@@ -96,6 +96,26 @@ export class Store {
     return this.data.keys();
   }
 
+  // Returns all live (non-expired) keys whose CRC16 hash slot equals `slot`.
+  // Used during slot migration to identify which keys to transfer.
+  // ponytail: O(n) scan over all keys — acceptable at this project's scale.
+  keysInSlot(slot: number, slotFn: (key: string) => number): string[] {
+    return this.dumpSlot(slot, slotFn).map((entry) => entry.key);
+  }
+
+  dumpSlot(
+    slot: number,
+    slotFn: (key: string) => number
+  ): Array<{ key: string; value: string; expiresAt: number | null }> {
+    const result: Array<{ key: string; value: string; expiresAt: number | null }> = [];
+    for (const [key, entry] of this.data) {
+      if (!this.isExpired(entry) && slotFn(key) === slot) {
+        result.push({ key, value: entry.value, expiresAt: entry.expiresAt });
+      }
+    }
+    return result;
+  }
+
   // A point-in-time export of every live (non-expired) entry, for
   // snapshotting. Read-only: does not sweep or mutate expired entries.
   dump(): Array<{ key: string; value: string; expiresAt: number | null }> {

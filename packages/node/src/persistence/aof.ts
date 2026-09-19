@@ -6,10 +6,22 @@ export type AofEntry =
   | { op: "DEL"; key: string }
   | { op: "EXPIRE"; key: string; expiresAt: number };
 
+export interface AofLogOptions {
+  // Test hook: replace the durability fsync. Production uses fsyncSync.
+  // A no-op here models "crash between write and fsync."
+  fsync?: (fd: number) => void;
+}
+
 export class AofLog {
   private fd: number | null = null;
+  private readonly fsync: (fd: number) => void;
 
-  constructor(private readonly filePath: string) {}
+  constructor(
+    private readonly filePath: string,
+    options: AofLogOptions = {}
+  ) {
+    this.fsync = options.fsync ?? fsyncSync;
+  }
 
   open(): void {
     mkdirSync(dirname(this.filePath), { recursive: true });
@@ -21,7 +33,7 @@ export class AofLog {
   append(entry: AofEntry): void {
     if (this.fd === null) throw new Error("AOF is not open");
     writeSync(this.fd, `${JSON.stringify(entry)}\n`);
-    fsyncSync(this.fd);
+    this.fsync(this.fd);
   }
 
   replay(): AofEntry[] {

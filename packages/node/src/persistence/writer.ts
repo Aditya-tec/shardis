@@ -20,6 +20,7 @@ export function entryForRequest(request: StoreRequest, now: () => number): AofEn
     case "EXPIRE":
       return { op: "EXPIRE", key: request.key, expiresAt: now() + request.ttl_ms };
     case "GET":
+    case "TTL":
       return null;
   }
 }

@@ -53,4 +53,53 @@ describe("ClusterGossip", () => {
     instance.announceOwnShardLeader("shard-a", "node-a2");
     expect(instance.getCurrentLeaderUrl("shard-a")).toBe("ws://a2/ws");
   });
+
+  it("rejects SHARD_LEADER_ANNOUNCE with a missing/invalid CLUSTER_SECRET", () => {
+    const events: Array<{ event: string; fields?: Record<string, unknown> }> = [];
+    let closedWith: number | undefined;
+    const instance = new ClusterGossip({
+      nodeId: "node-b1",
+      shards,
+      heartbeatIntervalMs: 100,
+      clusterSecret: "correct-secret",
+      log: (event, fields) => events.push({ event, fields }),
+      connect: () => {
+        throw new Error("not used");
+      }
+    });
+
+    const socket = {
+      close: (code: number) => {
+        closedWith = code;
+      }
+    } as unknown as WebSocket;
+
+    expect(
+      instance.handleInboundRaw(
+        socket,
+        JSON.stringify({
+          type: "SHARD_LEADER_ANNOUNCE",
+          shardId: "shard-a",
+          leaderId: "node-a2",
+          leaderUrl: "ws://a2/ws",
+          clusterSecret: "wrong"
+        })
+      )
+    ).toBe(true);
+    expect(closedWith).toBe(1008);
+    expect(events.some((e) => e.event === "peer_auth_rejected")).toBe(true);
+    // Leadership must not flip on a rejected announce.
+    expect(instance.getCurrentLeaderUrl("shard-a")).toBe("ws://a1/ws");
+  });
+
+  it("tracks slot migration state for ASK routing", () => {
+    const instance = gossip("node-a1");
+    expect(instance.shardForSlot(0)).toBe("shard-a");
+    instance.beginSlotMigration(0, "shard-a", "shard-b");
+    expect(instance.isSlotMigratingFrom(0, "shard-a")).toBe(true);
+    expect(instance.migrationDestUrl(0)).toBe("ws://b1/ws");
+    instance.finalizeSlotMigration(0, "shard-b");
+    expect(instance.shardForSlot(0)).toBe("shard-b");
+    expect(instance.isSlotMigratingFrom(0, "shard-a")).toBe(false);
+  });
 });

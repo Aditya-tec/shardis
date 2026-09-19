@@ -1,7 +1,7 @@
 "use client";
 
-import { HASH_SLOT_COUNT, SHARDS } from "../lib/clusterConfig";
-import type { NodeStatus } from "../lib/types";
+import { HASH_SLOT_COUNT } from "../lib/clusterConfig";
+import type { NodeStatus, ShardDescriptor } from "../lib/types";
 
 const COLORS = ["#5b8cff", "#4ade80", "#fbbf24", "#f472b6", "#60a5fa", "#a78bfa"];
 
@@ -18,7 +18,7 @@ function arcPath(cx: number, cy: number, r: number, startAngle: number, endAngle
   return `M ${cx} ${cy} L ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 1 ${end.x} ${end.y} Z`;
 }
 
-export function HashRing({ statuses }: { statuses: Record<string, NodeStatus> }) {
+export function HashRing({ statuses, shards }: { statuses: Record<string, NodeStatus>; shards: ShardDescriptor[] }) {
   const size = 320;
   const cx = size / 2;
   const cy = size / 2;
@@ -26,7 +26,7 @@ export function HashRing({ statuses }: { statuses: Record<string, NodeStatus> })
 
   let cursor = -Math.PI / 2;
 
-  const segments = SHARDS.map((shard, i) => {
+  const segments = shards.map((shard, i) => {
     const span = shard.hashRange[1] - shard.hashRange[0] + 1;
     const fraction = span / HASH_SLOT_COUNT;
     const startAngle = cursor;
@@ -81,7 +81,7 @@ export function HashRing({ statuses }: { statuses: Record<string, NodeStatus> })
           {HASH_SLOT_COUNT} slots
         </text>
         <text x={cx} y={cy + 12} fill="var(--text-dim)" fontSize={11} textAnchor="middle">
-          {SHARDS.length} shards
+          {shards.length} shards
         </text>
       </svg>
 

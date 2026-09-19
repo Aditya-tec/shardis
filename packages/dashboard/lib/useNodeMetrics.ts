@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { NODES } from "./clusterConfig";
-import type { NodeStatus } from "./types";
+import type { NodeDescriptor, NodeStatus } from "./types";
 
 const POLL_INTERVAL_MS = 1500;
 const FETCH_TIMEOUT_MS = 1200;
@@ -62,16 +61,16 @@ async function pollNode(id: string, shard: string, httpUrl: string): Promise<Nod
   };
 }
 
-export function useNodeMetrics(): Record<string, NodeStatus> {
+export function useNodeMetrics(nodes: NodeDescriptor[]): Record<string, NodeStatus> {
   const [statuses, setStatuses] = useState<Record<string, NodeStatus>>(() =>
-    Object.fromEntries(NODES.map((n) => [n.id, unreachable(n.id, n.shard)]))
+    Object.fromEntries(nodes.map((n) => [n.id, unreachable(n.id, n.shard)]))
   );
 
   useEffect(() => {
     let cancelled = false;
 
     async function pollAll() {
-      const results = await Promise.all(NODES.map((n) => pollNode(n.id, n.shard, n.httpUrl)));
+      const results = await Promise.all(nodes.map((n) => pollNode(n.id, n.shard, n.httpUrl)));
       if (cancelled) return;
       setStatuses(Object.fromEntries(results.map((r) => [r.id, r])));
     }
@@ -82,7 +81,7 @@ export function useNodeMetrics(): Record<string, NodeStatus> {
       cancelled = true;
       clearInterval(timer);
     };
-  }, []);
+  }, [nodes]);
 
   return statuses;
 }

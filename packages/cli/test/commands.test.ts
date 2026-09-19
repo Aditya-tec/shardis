@@ -48,6 +48,10 @@ describe("parseCommand", () => {
     expect(parseCommand("EXPIRE foo 1000")).toEqual({ op: "EXPIRE", key: "foo", ttl_ms: 1000 });
   });
 
+  it("parses TTL", () => {
+    expect(parseCommand("TTL foo")).toEqual({ op: "TTL", key: "foo" });
+  });
+
   it("parses SUBSCRIBE and UNSUBSCRIBE", () => {
     expect(parseCommand("SUBSCRIBE events")).toEqual({ op: "SUBSCRIBE", channel: "events" });
     expect(parseCommand("UNSUBSCRIBE events")).toEqual({ op: "UNSUBSCRIBE", channel: "events" });
@@ -58,6 +62,15 @@ describe("parseCommand", () => {
       op: "PUBLISH",
       channel: "events",
       message: "hello there"
+    });
+  });
+
+  it("parses PUBLISH --cluster as scope cluster", () => {
+    expect(parseCommand("PUBLISH events hello --cluster")).toEqual({
+      op: "PUBLISH",
+      channel: "events",
+      message: "hello",
+      scope: "cluster"
     });
   });
 

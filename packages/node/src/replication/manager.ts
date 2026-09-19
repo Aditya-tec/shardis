@@ -4,6 +4,15 @@ import type { ShardNode } from "../hashring/config.js";
 import type { AofEntry, AofLog } from "../persistence/aof.js";
 import { selectPromotedLeader } from "./promotion.js";
 import { tryParsePeerMessage, type PeerMessage } from "./protocol.js";
+import { writeKeyValid } from "../security/safeCompare.js";
+
+// Backpressure thresholds for the per-follower WebSocket send buffer.
+// ponytail: fixed byte ceilings rather than flow-control protocol — simple
+// and bounded. Ceiling: if a follower falls far enough behind that these
+// limits matter, it will reconnect and do a full resync, which is already
+// implemented and correct.
+export const REPL_BACKPRESSURE_THRESHOLD_BYTES = 1 * 1024 * 1024;   // 1 MB: pause sends
+export const REPL_DISCONNECT_THRESHOLD_BYTES  = 16 * 1024 * 1024;  // 16 MB: force reconnect
 
 export interface ReplicationManagerOptions {
   nodeId: string;
@@ -24,6 +33,7 @@ export interface ReplicationManagerOptions {
   onLeaderChanged?: (leaderId: string) => void;
   nodeUrl?: string;
   joinUrl?: string;
+  clusterSecret?: string;
 }
 
 interface PeerConnState {
@@ -31,6 +41,7 @@ interface PeerConnState {
   url: string;
   lastHeartbeatAt: number;
   outbound: boolean;
+  lagging: boolean; // true when bufferedAmount >= REPL_BACKPRESSURE_THRESHOLD_BYTES
 }
 
 export class ReplicationManager {
@@ -48,6 +59,7 @@ export class ReplicationManager {
   private readonly onLeaderChanged?: (leaderId: string) => void;
   private readonly nodeUrl?: string;
   private readonly joinUrl?: string;
+  private readonly clusterSecret?: string;
 
   private currentLeaderId: string;
   private lastSeenFromLeaderAt: number;
@@ -55,6 +67,9 @@ export class ReplicationManager {
   private lastAppliedSeq = 0;
   private lastAppliedLeaderId: string | null = null;
   private lastLagMs: number | null = null;
+  // Per-peer ACK tracking (leader only): when did we last receive REPL_ACK
+  // from each follower? Used to compute per-follower replication lag for /metrics.
+  private readonly peerLastAckTs = new Map<string, number>();
 
   private readonly connections = new Map<string, PeerConnState>();
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -76,6 +91,7 @@ export class ReplicationManager {
     this.onLeaderChanged = options.onLeaderChanged;
     this.nodeUrl = options.nodeUrl;
     this.joinUrl = options.joinUrl;
+    this.clusterSecret = options.clusterSecret;
     this.currentLeaderId = options.initialLeaderId;
     this.lastSeenFromLeaderAt = this.now();
   }
@@ -106,6 +122,27 @@ export class ReplicationManager {
   // null before any replication traffic has been seen.
   getLastReplicationLagMs(): number | null {
     return this.lastLagMs;
+  }
+
+  // Per-follower lag as seen from the leader: time since the last REPL_ACK
+  // from each connected follower.  null = follower connected but never ACKed.
+  // Only populated when isLeader() is true.
+  getPerFollowerLagMs(): Record<string, number | null> {
+    const result: Record<string, number | null> = {};
+    const now = this.now();
+    for (const peerId of this.connections.keys()) {
+      const lastAck = this.peerLastAckTs.get(peerId);
+      result[peerId] = lastAck !== undefined ? now - lastAck : null;
+    }
+    return result;
+  }
+
+  getPerFollowerLagging(): Record<string, boolean> {
+    const result: Record<string, boolean> = {};
+    for (const [peerId, conn] of this.connections.entries()) {
+      result[peerId] = conn.lagging;
+    }
+    return result;
   }
 
   start(): void {
@@ -204,13 +241,30 @@ export class ReplicationManager {
     }
 
     const payload = JSON.stringify(message);
-    for (const conn of this.connections.values()) {
-      if (conn.socket?.readyState === WebSocket.OPEN) {
-        try {
-          conn.socket.send(payload);
-        } catch {
-          // The peer's own close handler will reconnect; nothing to do here.
-        }
+    for (const [peerId, conn] of this.connections.entries()) {
+      if (conn.socket?.readyState !== WebSocket.OPEN) continue;
+
+      // Backpressure: check the WebSocket send buffer.  If the peer can't
+      // keep up, stop sending new ops to it (it will full-resync on reconnect
+      // if it disconnects). At the hard ceiling, close the connection so the
+      // follower reconnects and triggers a clean SYNC_REQUEST.
+      const buffered = (conn.socket as WebSocket & { bufferedAmount?: number }).bufferedAmount ?? 0;
+      if (buffered >= REPL_DISCONNECT_THRESHOLD_BYTES) {
+        this.log("replication_follower_disconnected", { peerId, bufferedAmount: buffered, reason: "hard_threshold" });
+        conn.socket.close();
+        continue;
+      }
+      if (buffered >= REPL_BACKPRESSURE_THRESHOLD_BYTES) {
+        conn.lagging = true;
+        this.log("replication_lagging", { peerId, bufferedAmount: buffered });
+        continue; // skip this send; follower will catch up on reconnect via full sync
+      }
+      conn.lagging = false;
+
+      try {
+        conn.socket.send(payload);
+      } catch {
+        // The peer's own close handler will reconnect; nothing to do here.
       }
     }
   }
@@ -218,10 +272,10 @@ export class ReplicationManager {
   private connectToPeer(peer: ShardNode): void {
     if (this.stopped) return;
     const socket = this.connectFn(peer.url);
-    this.connections.set(peer.id, { socket, url: peer.url, lastHeartbeatAt: 0, outbound: true });
+    this.connections.set(peer.id, { socket, url: peer.url, lastHeartbeatAt: 0, outbound: true, lagging: false });
 
     socket.on("open", () => {
-      socket.send(JSON.stringify({ type: "PEER_HELLO", nodeId: this.nodeId, shardId: this.shardId }));
+      socket.send(JSON.stringify({ type: "PEER_HELLO", nodeId: this.nodeId, shardId: this.shardId, clusterSecret: this.clusterSecret }));
       if (peer.id === this.currentLeaderId) this.requestSyncFrom(peer.id);
     });
 
@@ -242,16 +296,26 @@ export class ReplicationManager {
     });
   }
 
-  private registerInboundPeer(nodeId: string, shardId: string, socket: WebSocket): void {
+  private registerInboundPeer(nodeId: string, shardId: string, socket: WebSocket, clusterSecret?: string): void {
     if (shardId !== this.shardId) return;
     const known = this.peers.some((candidate) => candidate.id === nodeId);
     if (!known) return;
 
+    // Validate CLUSTER_SECRET if configured. Use safeCompare to prevent
+    // timing-based leaks of the secret value.
+    if (this.clusterSecret) {
+      if (!writeKeyValid(clusterSecret, this.clusterSecret)) {
+        this.log("peer_auth_rejected", { peerId: nodeId, reason: "invalid_cluster_secret" });
+        socket.close(1008, "invalid cluster secret");
+        return;
+      }
+    }
+
     const existing = this.connections.get(nodeId);
     if (existing?.outbound) return; // the canonical edge to this peer already exists
 
-    this.connections.set(nodeId, { socket, url: existing?.url ?? "", lastHeartbeatAt: this.now(), outbound: false });
-    socket.send(JSON.stringify({ type: "PEER_HELLO", nodeId: this.nodeId, shardId: this.shardId }));
+    this.connections.set(nodeId, { socket, url: existing?.url ?? "", lastHeartbeatAt: this.now(), outbound: false, lagging: false });
+    socket.send(JSON.stringify({ type: "PEER_HELLO", nodeId: this.nodeId, shardId: this.shardId, clusterSecret: this.clusterSecret }));
     if (nodeId === this.currentLeaderId) this.requestSyncFrom(nodeId);
   }
 
@@ -274,7 +338,7 @@ export class ReplicationManager {
   private handlePeerMessage(fromSocket: WebSocket, message: PeerMessage): void {
     switch (message.type) {
       case "PEER_HELLO":
-        this.registerInboundPeer(message.nodeId, message.shardId, fromSocket);
+        this.registerInboundPeer(message.nodeId, message.shardId, fromSocket, message.clusterSecret);
         return;
       case "MEMBER_JOIN":
         if (message.shardId !== this.shardId || message.nodeId === this.nodeId) return;
@@ -305,6 +369,7 @@ export class ReplicationManager {
         );
         return;
       case "REPL_ACK":
+        this.peerLastAckTs.set(message.nodeId, this.now());
         this.log("replication_ack", { from: message.nodeId, seq: message.seq });
         return;
       case "SYNC_REQUEST":

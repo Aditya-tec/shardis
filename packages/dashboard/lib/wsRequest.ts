@@ -8,6 +8,7 @@ export interface ConsoleRequest {
   channel?: string;
   message?: string;
   write_key?: string;
+  asking?: boolean;
 }
 
 export interface ConsoleResult {
@@ -15,6 +16,7 @@ export interface ConsoleResult {
   response: Record<string, unknown>;
   respondedByUrl: string;
   followedMoved: boolean;
+  followedAsk: boolean;
 }
 
 function randomId(): string {
@@ -67,7 +69,11 @@ export async function sendConsoleRequest(
   const first = await sendOnce(startUrl, request, timeoutMs);
   if (first.ok === false && first.error === "MOVED" && typeof first.leader === "string") {
     const second = await sendOnce(first.leader, request, timeoutMs);
-    return { request, response: second, respondedByUrl: first.leader, followedMoved: true };
+    return { request, response: second, respondedByUrl: first.leader, followedMoved: true, followedAsk: false };
   }
-  return { request, response: first, respondedByUrl: startUrl, followedMoved: false };
+  if (first.ok === false && first.error === "ASK" && typeof first.leader === "string") {
+    const second = await sendOnce(first.leader, { ...request, asking: true }, timeoutMs);
+    return { request, response: second, respondedByUrl: first.leader, followedMoved: false, followedAsk: true };
+  }
+  return { request, response: first, respondedByUrl: startUrl, followedMoved: false, followedAsk: false };
 }

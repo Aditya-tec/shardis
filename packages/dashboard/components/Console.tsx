@@ -1,12 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { NODES, SHARDS } from "../lib/clusterConfig";
 import { keySlot } from "../lib/keySlot";
-import type { NodeStatus } from "../lib/types";
+import type { NodeDescriptor, NodeStatus, ShardDescriptor } from "../lib/types";
 import { sendConsoleRequest, type ConsoleResult } from "../lib/wsRequest";
 
-const OPS = ["SET", "GET", "DEL", "EXPIRE"] as const;
+const OPS = ["SET", "GET", "DEL", "EXPIRE", "TTL"] as const;
 type Op = (typeof OPS)[number];
 
 const WRITE_KEY_STORAGE_KEY = "shardis-dashboard-write-key";
@@ -15,8 +14,6 @@ function loadStoredWriteKey(): string {
   try {
     return localStorage.getItem(WRITE_KEY_STORAGE_KEY) ?? "";
   } catch {
-    // Private browsing / blocked storage - fall back to an empty field
-    // rather than breaking the console.
     return "";
   }
 }
@@ -26,12 +23,20 @@ function storeWriteKey(value: string): void {
     if (value) localStorage.setItem(WRITE_KEY_STORAGE_KEY, value);
     else localStorage.removeItem(WRITE_KEY_STORAGE_KEY);
   } catch {
-    // Ignore - this is a convenience, not required state.
+    // Ignore - convenience only.
   }
 }
 
-export function Console({ statuses = {} }: { statuses?: Record<string, NodeStatus> }) {
-  const [nodeId, setNodeId] = useState(NODES[0]?.id ?? "");
+export function Console({
+  statuses = {},
+  nodes,
+  shards
+}: {
+  statuses?: Record<string, NodeStatus>;
+  nodes: NodeDescriptor[];
+  shards: ShardDescriptor[];
+}) {
+  const [nodeId, setNodeId] = useState(nodes[0]?.id ?? "");
   const [op, setOp] = useState<Op>("SET");
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
@@ -41,14 +46,18 @@ export function Console({ statuses = {} }: { statuses?: Record<string, NodeStatu
   const [history, setHistory] = useState<ConsoleResult[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const targetNode = NODES.find((n) => n.id === nodeId) ?? NODES[0];
-  const isWriteOp = op !== "GET";
+  useEffect(() => {
+    if (!nodes.some((n) => n.id === nodeId) && nodes[0]) setNodeId(nodes[0].id);
+  }, [nodes, nodeId]);
+
+  const targetNode = nodes.find((n) => n.id === nodeId) ?? nodes[0];
+  const isWriteOp = op !== "GET" && op !== "TTL";
 
   function routeForKey(nextKey: string) {
     const slot = keySlot(nextKey);
-    const shard = SHARDS.find((candidate) => slot >= candidate.hashRange[0] && slot <= candidate.hashRange[1]);
+    const shard = shards.find((candidate) => slot >= candidate.hashRange[0] && slot <= candidate.hashRange[1]);
     if (!shard) return null;
-    const candidates = NODES.filter((node) => shard.nodeIds.includes(node.id));
+    const candidates = nodes.filter((node) => shard.nodeIds.includes(node.id));
     const leader = candidates.find((node) => statuses[node.id]?.reachable && statuses[node.id]?.role === "leader");
     const reachable = candidates.find((node) => statuses[node.id]?.reachable);
     return { node: leader ?? reachable ?? candidates[0], shard: shard.id, slot };
@@ -60,12 +69,22 @@ export function Console({ statuses = {} }: { statuses?: Record<string, NodeStatu
     if (!route || route.node.id === nodeId) return;
     setNodeId(route.node.id);
     setError(null);
-  }, [key, statuses]);
+  }, [key, statuses, nodes, shards]);
 
   const routePreview = key.trim() ? routeForKey(key.trim()) : null;
 
   function explain(result: ConsoleResult): string {
-    const r = result.response as { ok?: boolean; error?: string; value?: unknown; deleted?: boolean; updated?: boolean };
+    const r = result.response as {
+      ok?: boolean;
+      error?: string;
+      value?: unknown;
+      deleted?: boolean;
+      updated?: boolean;
+      ttl_ms?: number | null;
+    };
+    if (result.followedAsk) {
+      return `Slot is mid-migration; followed ASK once to ${result.respondedByUrl} without caching it as permanent routing.`;
+    }
     if (result.followedMoved) {
       return `The node you asked didn't own this key, so the request was auto-redirected to ${result.respondedByUrl}, the leader that does.`;
     }
@@ -78,15 +97,15 @@ export function Console({ statuses = {} }: { statuses?: Record<string, NodeStatu
     if (result.request.op === "GET") {
       return r.value === undefined ? "Key not found on this node." : "Read succeeded - value returned from this node's in-memory store.";
     }
+    if (result.request.op === "TTL") {
+      return r.ttl_ms === null ? "Key exists with no expiry." : `Remaining TTL: ${r.ttl_ms}ms.`;
+    }
     if (result.request.op === "DEL") {
       return r.deleted ? "Key deleted and the change is replicating to followers." : "Nothing to delete - key didn't exist.";
     }
     return "Write accepted by the leader and is replicating to followers now.";
   }
 
-  // Loaded after mount, not as the initial state, so server-rendered HTML
-  // (which has no access to the browser's localStorage) and the client's
-  // first paint match - avoids a hydration mismatch.
   useEffect(() => {
     setWriteKey(loadStoredWriteKey());
   }, []);
@@ -127,7 +146,7 @@ export function Console({ statuses = {} }: { statuses?: Record<string, NodeStatu
     <div>
       <form className="console-form" onSubmit={handleSubmit}>
         <select value={nodeId} onChange={(e) => setNodeId(e.target.value)} aria-label="Target node">
-          {NODES.map((n) => (
+          {nodes.map((n) => (
             <option key={n.id} value={n.id}>
               {n.id} ({n.shard})
             </option>
@@ -183,6 +202,7 @@ export function Console({ statuses = {} }: { statuses?: Record<string, NodeStatu
             <div className="meta">
               {result.request.op} {result.request.key} → {result.respondedByUrl}
               {result.followedMoved ? " (followed MOVED)" : ""}
+              {result.followedAsk ? " (followed ASK)" : ""}
             </div>
             <div className="explain">{explain(result)}</div>
             <div className="raw">{JSON.stringify(result.response)}</div>

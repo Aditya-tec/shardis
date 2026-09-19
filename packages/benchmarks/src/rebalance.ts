@@ -6,14 +6,12 @@ const SCENARIO = (process.env.BENCH_REBALANCE_SCENARIO ?? "add") as "add" | "rem
 const OLD_SHARD_COUNT = 3;
 const NEW_SHARD_COUNT = SCENARIO === "add" ? OLD_SHARD_COUNT + 1 : OLD_SHARD_COUNT - 1;
 
-// Shardis partitions by fixed, contiguous hash_range per shard (Redis
-// Cluster style) rather than true consistent hashing with virtual nodes.
-// Redividing those ranges evenly across a new shard count is the
-// realistic thing an operator would do after adding/removing a shard -
-// and it moves *far* more than the textbook "~1/N" a virtual-node ring
-// would, since most boundaries shift, not just one local region. That
-// gap is exactly why this benchmark measures the actual number instead
-// of assuming it.
+// This benchmark measures a *naive re-bootstrap*: discarding all slot
+// assignments and recomputing even contiguous ranges from scratch.  This is
+// NOT how a production Redis Cluster rebalances — real resharding is done
+// by an explicit slot-by-slot migration (see the reshard benchmark).
+// This number is kept here so the improvement from real resharding is
+// visible.  It is labeled accordingly in docs/benchmarks.md.
 function evenRanges(shardCount: number): Array<[number, number]> {
   const ranges: Array<[number, number]> = [];
   const base = Math.floor(SLOT_COUNT / shardCount);
@@ -47,13 +45,14 @@ async function main(): Promise<void> {
   const textbookPct = (1 / NEW_SHARD_COUNT) * 100;
 
   console.log(
-    `${SCENARIO === "add" ? "Adding" : "Removing"} a shard (${OLD_SHARD_COUNT} -> ${NEW_SHARD_COUNT}): ` +
+    `[naive-rebootstrap] ${SCENARIO === "add" ? "Adding" : "Removing"} a shard (${OLD_SHARD_COUNT} -> ${NEW_SHARD_COUNT}): ` +
       `${changed}/${SAMPLE_SIZE} keys moved (${pct.toFixed(2)}%). ` +
-      `A virtual-node consistent-hash ring's textbook expectation would be ~${textbookPct.toFixed(2)}%.`
+      `Virtual-node textbook: ~${textbookPct.toFixed(2)}%. ` +
+      `(This is a naive re-bootstrap, NOT how real resharding works. See bench:reshard for the real mechanism.)`
   );
 
   appendBenchmarkRow(
-    "Rebalance",
+    "Rebalance (naive re-bootstrap — NOT production-realistic; see Reshard benchmark below for real mechanism)",
     ["Scenario", "Shards (before -> after)", "Sample size", "Keys moved", "Moved %", "Virtual-node textbook %"],
     [
       SCENARIO,

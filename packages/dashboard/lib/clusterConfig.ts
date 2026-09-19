@@ -37,3 +37,38 @@ export const SHARDS: ShardDescriptor[] =
   parseEnvJson<ShardDescriptor[]>(process.env.NEXT_PUBLIC_CLUSTER_SHARDS) ?? DEFAULT_SHARDS;
 
 export const HASH_SLOT_COUNT = 16384;
+
+export const BOOTSTRAP_NODE_URL = process.env.NEXT_PUBLIC_BOOTSTRAP_NODE_URL;
+
+export interface ClusterTopologyJson {
+  shards: Array<{
+    id: string;
+    hash_range: [number, number];
+    leader: { id: string; url: string };
+    followers: Array<{ id: string; url: string }>;
+  }>;
+}
+
+export function wsToHttp(wsUrl: string): string {
+  return wsUrl.replace(/^ws(s?):\/\//, (_, s: string) => `http${s}://`).replace(/\/ws$/, "");
+}
+
+export function descriptorsFromTopology(topo: ClusterTopologyJson): {
+  nodes: NodeDescriptor[];
+  shards: ShardDescriptor[];
+} {
+  const nodes: NodeDescriptor[] = [];
+  const shards: ShardDescriptor[] = topo.shards.map((shard) => {
+    const members = [shard.leader, ...shard.followers];
+    for (const member of members) {
+      nodes.push({
+        id: member.id,
+        shard: shard.id,
+        httpUrl: wsToHttp(member.url),
+        wsUrl: member.url
+      });
+    }
+    return { id: shard.id, hashRange: shard.hash_range, nodeIds: members.map((m) => m.id) };
+  });
+  return { nodes, shards };
+}

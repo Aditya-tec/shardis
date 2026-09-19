@@ -12,6 +12,7 @@ const KNOWN_OPS: ReadonlySet<RequestOp> = new Set([
   "GET",
   "DEL",
   "EXPIRE",
+  "TTL",
   "SUBSCRIBE",
   "UNSUBSCRIBE",
   "PUBLISH"
@@ -31,6 +32,10 @@ function valueTooLarge(value: string, limit: number): boolean {
 
 function writeKey(body: Record<string, unknown>): string | undefined {
   return typeof body.write_key === "string" ? body.write_key : undefined;
+}
+
+function asking(body: Record<string, unknown>): true | undefined {
+  return body.asking === true ? true : undefined;
 }
 
 export function parseRequest(raw: string, limits: ParseLimits): ParseResult {
@@ -72,22 +77,25 @@ export function parseRequest(raw: string, limits: ParseLimits): ParseResult {
         key: body.key,
         value: body.value,
         ttl_ms: body.ttl_ms as number | undefined,
-        write_key: writeKey(body)
+        write_key: writeKey(body),
+        asking: asking(body)
       }
     };
   }
 
-  if (op === "GET" || op === "DEL") {
+  if (op === "GET" || op === "DEL" || op === "TTL") {
     if (typeof body.key !== "string") return err(id, "missing_key");
     if (keyTooLarge(body.key, limits.maxKeyBytes)) return err(id, "key_too_large");
-    return { ok: true, request: op === "DEL" ? { id, op, key: body.key, write_key: writeKey(body) } : { id, op, key: body.key } };
+    if (op === "DEL") return { ok: true, request: { id, op, key: body.key, write_key: writeKey(body), asking: asking(body) } };
+    if (op === "TTL") return { ok: true, request: { id, op, key: body.key, asking: asking(body) } };
+    return { ok: true, request: { id, op, key: body.key, asking: asking(body) } };
   }
 
   if (op === "EXPIRE") {
     if (typeof body.key !== "string") return err(id, "missing_key");
     if (typeof body.ttl_ms !== "number" || !Number.isFinite(body.ttl_ms)) return err(id, "invalid_ttl");
     if (keyTooLarge(body.key, limits.maxKeyBytes)) return err(id, "key_too_large");
-    return { ok: true, request: { id, op, key: body.key, ttl_ms: body.ttl_ms, write_key: writeKey(body) } };
+    return { ok: true, request: { id, op, key: body.key, ttl_ms: body.ttl_ms, write_key: writeKey(body), asking: asking(body) } };
   }
 
   if (op === "SUBSCRIBE" || op === "UNSUBSCRIBE") {
@@ -101,5 +109,6 @@ export function parseRequest(raw: string, limits: ParseLimits): ParseResult {
   if (typeof body.message !== "string") return err(id, "missing_message");
   if (keyTooLarge(body.channel, limits.maxKeyBytes)) return err(id, "channel_too_large");
   if (valueTooLarge(body.message, limits.maxValueBytes)) return err(id, "message_too_large");
-  return { ok: true, request: { id, op, channel: body.channel, message: body.message, write_key: writeKey(body) } };
+  const scope = body.scope === "cluster" ? "cluster" as const : body.scope === "local" ? "local" as const : undefined;
+  return { ok: true, request: { id, op, channel: body.channel, message: body.message, write_key: writeKey(body), scope } };
 }
