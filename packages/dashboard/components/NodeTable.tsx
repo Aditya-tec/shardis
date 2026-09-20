@@ -15,6 +15,27 @@ function StatusBadge({ status }: { status: NodeStatus }) {
   return <span className="badge follower">follower</span>;
 }
 
+// Topology discovery can replace the initial local node list before the first
+// metrics poll for the newly discovered nodes completes. Keep that one-render
+// loading window safe and visibly represent it as an unavailable node instead
+// of dereferencing an absent status object.
+function pendingStatus(node: NodeDescriptor): NodeStatus {
+  return {
+    id: node.id,
+    shard: node.shard,
+    reachable: false,
+    role: "unknown",
+    uptimeS: null,
+    keys: null,
+    evictions: null,
+    opsTotal: null,
+    connectedSockets: null,
+    connectedPeers: null,
+    replicationLagMs: null,
+    lastUpdated: 0
+  };
+}
+
 export function NodeTable({
   statuses,
   nodes
@@ -39,7 +60,7 @@ export function NodeTable({
       </thead>
       <tbody>
         {nodes.map((node) => {
-          const status = statuses[node.id];
+          const status = statuses[node.id] ?? pendingStatus(node);
           return (
             <tr key={node.id}>
               <td className="mono">
