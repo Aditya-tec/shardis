@@ -157,6 +157,7 @@ Benchmarks are recorded with a timestamp and commit hash in [docs/benchmarks.md]
 | Scenario | Result |
 | --- | --- |
 | Throughput | 2,260 ops/sec with 10 clients over 5 seconds |
+| Scaling sweep | 18,123 ops/sec peak at 5 clients in a short single-node sweep |
 | Failover recovery | 2,846 ms total with a 3,000 ms heartbeat timeout |
 | Replication lag | 4.5 ms average; 7 ms p95 across 50 samples |
 | Range recompute | ~50% of keys move when changing 3 shards to 4 |
@@ -215,6 +216,10 @@ GitHub Actions builds and tests every package, audits dependencies, runs the rea
 
 - [Architecture](docs/architecture.md)
 - [Benchmark history](docs/benchmarks.md)
+- [Throughput scaling chart](docs/media/throughput-scaling.svg)
 - [Deployment guide](docs/deployment.md)
 - [CI/CD operations](docs/ci-cd.md)
+- [Architecture decision records](docs/adr)
+- [Production-readiness roadmap](docs/production-readiness.md)
 - [Security policy](SECURITY.md)
+- [MIT License](LICENSE)

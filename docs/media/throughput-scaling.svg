@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="440" viewBox="0 0 800 440" role="img" aria-labelledby="title desc">
+  <title id="title">Shardis throughput scaling sweep</title>
+  <desc id="desc">Operations per second for 1, 5, 10, and 20 concurrent clients. Throughput peaks at 18,123 operations per second with five clients.</desc>
+  <rect width="800" height="440" fill="#ffffff"/>
+  <text x="70" y="38" font-family="Arial, sans-serif" font-size="22" font-weight="700" fill="#111827">Throughput scaling sweep</text>
+  <text x="70" y="62" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">Local single-node benchmark · 3-second runs · commit 9b65d4f</text>
+  <g stroke="#d1d5db" stroke-width="1">
+    <line x1="80" y1="360" x2="750" y2="360"/><line x1="80" y1="285" x2="750" y2="285"/>
+    <line x1="80" y1="210" x2="750" y2="210"/><line x1="80" y1="135" x2="750" y2="135"/>
+    <line x1="80" y1="60" x2="750" y2="60"/>
+  </g>
+  <g font-family="Arial, sans-serif" font-size="12" fill="#4b5563" text-anchor="end">
+    <text x="70" y="364">0</text><text x="70" y="289">5k</text><text x="70" y="214">10k</text>
+    <text x="70" y="139">15k</text><text x="70" y="64">20k</text>
+  </g>
+  <g stroke="#111827" stroke-width="1.5"><line x1="80" y1="60" x2="80" y2="360"/><line x1="80" y1="360" x2="750" y2="360"/></g>
+  <polyline points="130,203 330,88 530,125 730,238" fill="none" stroke="#2563eb" stroke-width="4"/>
+  <g fill="#2563eb" stroke="#ffffff" stroke-width="3"><circle cx="130" cy="203" r="7"/><circle cx="330" cy="88" r="7"/><circle cx="530" cy="125" r="7"/><circle cx="730" cy="238" r="7"/></g>
+  <g font-family="Arial, sans-serif" font-size="13" fill="#111827" text-anchor="middle"><text x="130" y="385">1</text><text x="330" y="385">5</text><text x="530" y="385">10</text><text x="730" y="385">20</text></g>
+  <text x="415" y="420" font-family="Arial, sans-serif" font-size="13" fill="#4b5563" text-anchor="middle">Concurrent clients</text>
+  <text transform="translate(20 220) rotate(-90)" font-family="Arial, sans-serif" font-size="13" fill="#4b5563" text-anchor="middle">Operations per second</text>
+  <g font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#1d4ed8" text-anchor="middle"><text x="130" y="187">10,462</text><text x="330" y="76">18,123</text><text x="530" y="113">15,668</text><text x="730" y="222">8,124</text></g>
+</svg>

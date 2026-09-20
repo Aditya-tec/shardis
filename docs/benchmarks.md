@@ -30,6 +30,22 @@ Live slot-by-slot migration with a concurrent write client. Only transient `ASK`
 | --- | --- | --- | --- | --- | --- |
 | 2026-09-18T06:23:56.204Z | d0c35ad | 10 | 5.01 | 11312 | 2260 |
 | 2026-09-18T06:24:41.664Z | d0c35ad | 20 | 10.01 | 18708 | 1869 |
+| 2026-09-20T08:43:28.899Z | 9b65d4f | 1 | 3.00 | 31386 | 10462 |
+| 2026-09-20T08:43:36.267Z | 9b65d4f | 5 | 3.00 | 54369 | 18123 |
+| 2026-09-20T08:43:44.782Z | 9b65d4f | 10 | 3.00 | 47021 | 15668 |
+| 2026-09-20T08:43:51.682Z | 9b65d4f | 20 | 3.02 | 24575 | 8124 |
+
+### Scaling sweep
+
+![Throughput scaling sweep](media/throughput-scaling.svg)
+
+The local single-node sweep (three-second runs, commit `9b65d4f`) peaked at
+18,123 ops/sec with five concurrent clients, then declined at 10 and 20
+clients. This is consistent with contention and event-loop saturation in the
+single benchmark node; it is not a cluster-wide capacity claim. The 50- and
+100-client runs need a benchmark-runner timeout/cleanup improvement before
+they can be reported reliably, so they are intentionally omitted rather than
+estimated.
 
 ## Failover
 
