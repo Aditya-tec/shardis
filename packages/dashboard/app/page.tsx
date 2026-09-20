@@ -13,6 +13,8 @@ export default function DashboardPage() {
   const statuses = useNodeMetrics(nodes);
   const events = useEventFeed(nodes);
   const isConnecting = nodes.some((node) => statuses[node.id] === undefined);
+  const reachableCount = nodes.filter((node) => statuses[node.id]?.reachable).length;
+  const isWaking = !isConnecting && nodes.length > 0 && reachableCount === 0;
 
   return (
     <main className="page">
@@ -56,8 +58,15 @@ export default function DashboardPage() {
           <h2>Live cluster</h2>
           <div className="subtitle">Health, ownership, replication, and events from the nodes running now.</div>
         </div>
-        <div className="live-indicator"><span /> Live monitoring</div>
+        <div className={`live-indicator${isWaking ? " waking" : ""}`}><span /> {isWaking ? "Waking free demo" : "Live monitoring"}</div>
       </div>
+
+      {isWaking && (
+        <div className="wake-notice" role="status">
+          <strong>The free Render demo is waking up.</strong>
+          <span>Shardis is retrying both nodes automatically. Render cold starts can take about a minute; no refresh is needed.</span>
+        </div>
+      )}
 
       <div className="grid">
         <div className="panel">

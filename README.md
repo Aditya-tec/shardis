@@ -179,6 +179,16 @@ Shardis is not intended to be exposed directly to the public internet.
 
 Please review [SECURITY.md](SECURITY.md) before reporting a vulnerability or deploying an internet-facing instance.
 
+### Free public-demo behavior
+
+The reduced two-node Render demo is intentionally a preview environment, not an
+always-on service. Free Render web services sleep after 15 minutes without
+traffic and can take roughly a minute to wake. The dashboard retries nodes
+automatically and displays a waking state during that interval. We deliberately
+do not run synthetic keep-alive traffic: keeping two services active all month
+would exceed a free workspace's shared instance-hour budget. Use local Docker
+Compose for the full, durable six-node cluster.
+
 ## Design choices and known limits
 
 - **Default failover is not consensus.** Deterministic promotion is useful for controlled environments but can have a split-brain window during a network partition.

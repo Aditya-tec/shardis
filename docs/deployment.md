@@ -45,6 +45,10 @@ there's no dynamic service-discovery in this v1 design; see
 - **First request after idle is slow.** Free services spin down after
   15 minutes with no traffic and take ~1 minute to wake on the next
   request. That's Render's free tier, not a bug here.
+- **No synthetic keep-alive is configured.** The reduced demo has two web
+  services, while free workspaces have a shared monthly instance-hour budget.
+  Keeping both awake continuously would exhaust that budget. The Vercel
+  dashboard retries automatically and shows a waking notice instead.
 - **Data does not survive a redeploy or a spin-down/wake cycle.** No
   persistent disk on the free plan — `DATA_DIR=/data` is real local
   storage while the container is alive, gone once it isn't. This is a

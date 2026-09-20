@@ -71,6 +71,8 @@ code, .mono { font-family: var(--mono); }
 
 .live-indicator { display: inline-flex; align-items: center; gap: 8px; color: var(--text-dim); font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
 .live-indicator span { width: 7px; height: 7px; border: 1px solid var(--text); border-radius: 50%; animation: live-pulse 1.8s ease-out infinite; }
+.live-indicator.waking { color: var(--text); }.live-indicator.waking span { animation-duration: .8s; }
+.wake-notice { display: grid; gap: 4px; margin: -8px 0 20px; padding: 12px 14px; border-left: 2px solid var(--text); background: rgba(255,255,255,.07); color: var(--text-dim); font-size: 13px; }.wake-notice strong { color: var(--text); font-weight: 600; }
 
 .grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
 .grid > * { min-width: 0; }
