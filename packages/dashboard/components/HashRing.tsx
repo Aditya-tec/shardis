@@ -18,7 +18,10 @@ function arcPath(cx: number, cy: number, r: number, startAngle: number, endAngle
   return `M ${cx} ${cy} L ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 1 ${end.x} ${end.y} Z`;
 }
 
-export function HashRing({ statuses, shards }: { statuses: Record<string, NodeStatus>; shards: ShardDescriptor[] }) {
+export function HashRing({ statuses, shards, loading = false }: { statuses: Record<string, NodeStatus>; shards: ShardDescriptor[]; loading?: boolean }) {
+  if (loading) {
+    return <div className="ring-skeleton" aria-label="Loading cluster topology" aria-busy="true"><span className="skeleton ring-skeleton-circle" /><span className="skeleton skeleton-wide" /><span className="skeleton skeleton-wide" /></div>;
+  }
   const size = 320;
   const cx = size / 2;
   const cy = size / 2;

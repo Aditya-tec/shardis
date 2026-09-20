@@ -12,6 +12,7 @@ export default function DashboardPage() {
   const { nodes, shards } = useClusterTopology();
   const statuses = useNodeMetrics(nodes);
   const events = useEventFeed(nodes);
+  const isConnecting = nodes.some((node) => statuses[node.id] === undefined);
 
   return (
     <main className="page">
@@ -61,13 +62,13 @@ export default function DashboardPage() {
       <div className="grid">
         <div className="panel">
           <h2>Hash ring</h2>
-          <HashRing statuses={statuses} shards={shards} />
+          <HashRing statuses={statuses} shards={shards} loading={isConnecting} />
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           <div className="panel" id="console">
             <h2>Nodes</h2>
-            <NodeTable statuses={statuses} nodes={nodes} />
+            <NodeTable statuses={statuses} nodes={nodes} loading={isConnecting} />
           </div>
 
           <div className="panel">
@@ -77,7 +78,7 @@ export default function DashboardPage() {
 
           <div className="panel">
             <h2>Live event feed</h2>
-            <EventFeed events={events} />
+            <EventFeed events={events} loading={isConnecting} />
           </div>
         </div>
       </div>

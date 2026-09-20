@@ -93,6 +93,10 @@ th { color: var(--text-dim); font-size: 11px; font-weight: 500; letter-spacing: 
 .dot.follower { background: var(--follower); box-shadow: 0 0 8px rgba(190,190,190,.45); }
 .dot.down { background: var(--down); opacity: .6; }
 
+.skeleton { display: inline-block; height: 12px; border-radius: 2px; background: linear-gradient(90deg, #202020 25%, #303030 50%, #202020 75%); background-size: 200% 100%; animation: skeleton-shimmer 1.3s ease-in-out infinite; }
+.skeleton-name { width: 104px; }.skeleton-short { width: 56px; }.skeleton-badge { width: 72px; height: 24px; }.skeleton-wide { width: 100%; }
+.skeleton-table td { height: 46px; }.ring-skeleton { display: flex; min-height: 340px; flex-direction: column; align-items: center; justify-content: center; gap: 18px; }.ring-skeleton-circle { width: 240px; height: 240px; border-radius: 50%; }.ring-skeleton .skeleton-wide { width: 90%; }.event-skeleton { display: grid; gap: 10px; }.event-skeleton .skeleton-wide { height: 28px; }
+
 .event-feed { display: flex; max-height: 420px; flex-direction: column; gap: 2px; overflow-y: auto; }
 .event-explainer { display: grid; gap: 4px; margin-bottom: 12px; padding: 12px 14px; border-left: 2px solid var(--signal); background: rgba(255,255,255,.07); }
 .event-explainer-label { color: var(--signal); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
@@ -134,6 +138,7 @@ th { color: var(--text-dim); font-size: 11px; font-weight: 500; letter-spacing: 
 @keyframes live-pulse { 0% { box-shadow: 0 0 0 0 rgba(255,255,255,.45); } 70% { box-shadow: 0 0 0 7px rgba(255,255,255,0); } 100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); } }
 @keyframes dot-breathe { 0%,100% { opacity: .72; transform: scale(.9); } 50% { opacity: 1; transform: scale(1.18); } }
 @keyframes event-slide { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes skeleton-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; } }
 

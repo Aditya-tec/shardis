@@ -17,7 +17,10 @@ function formatFields(event: LiveEvent): string {
   return entries.map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(" ");
 }
 
-export function EventFeed({ events }: { events: LiveEvent[] }) {
+export function EventFeed({ events, loading = false }: { events: LiveEvent[]; loading?: boolean }) {
+  if (loading) {
+    return <div className="event-skeleton" aria-label="Connecting to cluster events" aria-busy="true"><span className="skeleton skeleton-wide" /><span className="skeleton skeleton-wide" /><span className="skeleton skeleton-wide" /></div>;
+  }
   if (events.length === 0) {
     return <p className="hint">Waiting for events... make a write against the cluster to see one land here.</p>;
   }

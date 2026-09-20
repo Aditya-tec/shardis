@@ -38,11 +38,23 @@ function pendingStatus(node: NodeDescriptor): NodeStatus {
 
 export function NodeTable({
   statuses,
-  nodes
+  nodes,
+  loading = false
 }: {
   statuses: Record<string, NodeStatus>;
   nodes: NodeDescriptor[];
+  loading?: boolean;
 }) {
+  if (loading) {
+    return (
+      <div className="table-scroll" aria-label="Loading node status" aria-busy="true">
+        <table className="skeleton-table">
+          <thead><tr><th>Node</th><th>Shard</th><th>Role</th><th>Uptime</th><th>Keys</th><th>Evictions</th><th>Ops</th><th>Peers</th><th>Repl. lag</th></tr></thead>
+          <tbody>{nodes.map((node) => <tr key={node.id}><td><span className="skeleton skeleton-name" /></td><td><span className="skeleton skeleton-short" /></td><td><span className="skeleton skeleton-badge" /></td><td colSpan={6}><span className="skeleton skeleton-wide" /></td></tr>)}</tbody>
+        </table>
+      </div>
+    );
+  }
   return (
     <table>
       <thead>
