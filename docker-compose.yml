@@ -16,6 +16,7 @@ x-node-common: &node-common
     MAX_KEY_BYTES: "1024"
     MAX_VALUE_BYTES: "65536"
     PUBLIC_DEMO: "false"
+    CLUSTER_SECRET: ${CLUSTER_SECRET:-}
   networks:
     - shardis-net
   # HEALTHCHECK is declared once, in packages/node/Dockerfile, and applies here too.

@@ -57,6 +57,8 @@ services:
         value: "true"
       - key: DEMO_WRITE_KEY
         sync: false
+      - key: CLUSTER_SECRET
+        sync: false
 
   - type: web
     name: shardis-follower
@@ -97,4 +99,6 @@ services:
       - key: PUBLIC_DEMO
         value: "true"
       - key: DEMO_WRITE_KEY
+        sync: false
+      - key: CLUSTER_SECRET
         sync: false

@@ -1,0 +1,40 @@
+name: Snapshot Backup
+
+on:
+  schedule:
+    - cron: "30 2 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLUSTER_SECRET: ${{ secrets.SHARDIS_BACKUP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start the local cluster
+        run: docker compose up -d --build
+      - name: Wait for leaders
+        run: |
+          for port in 7001 7003 7005; do
+            timeout 90 bash -c "until curl -sf http://localhost:$port/healthz | jq -e '.role == \"leader\"' >/dev/null; do sleep 2; done"
+          done
+      - name: Force and collect durable snapshots
+        run: |
+          mkdir -p backups
+          for node in node-a1 node-b1 node-c1; do
+            docker exec -e CLUSTER_SECRET="$CLUSTER_SECRET" "$node" node -e "fetch('http://127.0.0.1:7000/admin/snapshot',{method:'POST',headers:process.env.CLUSTER_SECRET?{'x-shardis-admin-token':process.env.CLUSTER_SECRET}:{}}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+            docker cp "$node:/data/snapshot.json" "backups/$node-snapshot.json"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shardis-snapshots-${{ github.run_id }}
+          path: backups/*.json
+          retention-days: 30
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

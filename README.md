@@ -219,6 +219,7 @@ GitHub Actions builds and tests every package, audits dependencies, runs the rea
 - [Throughput scaling chart](docs/media/throughput-scaling.svg)
 - [Deployment guide](docs/deployment.md)
 - [CI/CD operations](docs/ci-cd.md)
+- [Backup and restore runbook](docs/backup-and-restore.md)
 - [Architecture decision records](docs/adr)
 - [Production-readiness roadmap](docs/production-readiness.md)
 - [Security policy](SECURITY.md)

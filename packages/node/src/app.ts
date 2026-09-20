@@ -21,7 +21,7 @@ import type { ReplicationController } from "./replication/controller.js";
 import { ClusterGossip } from "./gossip/clusterGossip.js";
 import { ReplicationManager } from "./replication/manager.js";
 import { TokenBucket } from "./security/rateLimit.js";
-import { writeKeyValid } from "./security/safeCompare.js";
+import { safeCompare, writeKeyValid } from "./security/safeCompare.js";
 import { randomUUID } from "node:crypto";
 
 export interface App {
@@ -207,6 +207,33 @@ export function createApp(config: NodeConfig, startedAt = Date.now()): App {
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(clusterConfig));
+      return;
+    }
+
+    // Administrative endpoints are intentionally open for local development
+    // when CLUSTER_SECRET is unset. Any deployment that sets the cluster
+    // secret must present it in this header as well, preventing public users
+    // from initiating migration, injecting a slot, or exporting a snapshot.
+    const isAdminRoute = req.url?.startsWith("/admin/") ?? false;
+    if (isAdminRoute && config.clusterSecret) {
+      const provided = req.headers["x-shardis-admin-token"];
+      const token = Array.isArray(provided) ? provided[0] : provided;
+      if (!safeCompare(token, config.clusterSecret)) {
+        log("admin_rejected", { route: req.url });
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "admin_unauthorized" }));
+        return;
+      }
+    }
+
+    // POST /admin/snapshot — force a durable snapshot and return its current
+    // entries for an authenticated backup job. This avoids copying a live AOF
+    // while preserving the exact snapshot format used during startup recovery.
+    if (req.method === "POST" && req.url === "/admin/snapshot") {
+      snapshotNow();
+      const entries = store.dump();
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ node_id: config.nodeId, shard: config.shardId, entries }));
       return;
     }
 

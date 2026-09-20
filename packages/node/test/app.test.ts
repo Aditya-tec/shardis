@@ -245,6 +245,27 @@ describe("app WS protocol", () => {
     expect(after.ops_total).toBe(2);
   });
 
+  it("protects administrative routes and exports a durable snapshot when CLUSTER_SECRET is set", async () => {
+    const { app: secureApp } = await startApp({ clusterSecret: "admin-secret" });
+    const port = (secureApp.server.address() as AddressInfo).port;
+    try {
+      const denied = await fetch(`http://127.0.0.1:${port}/admin/snapshot`, { method: "POST" });
+      expect(denied.status).toBe(401);
+
+      secureApp.store.set("backed-up", "value");
+      const allowed = await fetch(`http://127.0.0.1:${port}/admin/snapshot`, {
+        method: "POST",
+        headers: { "x-shardis-admin-token": "admin-secret" }
+      });
+      expect(allowed.status).toBe(200);
+      expect(await allowed.json()).toMatchObject({ node_id: "node-test", entries: [{ key: "backed-up", value: "value" }] });
+    } finally {
+      secureApp.wss.close();
+      secureApp.close();
+      await new Promise<void>((resolve) => secureApp.server.close(() => resolve()));
+    }
+  });
+
   it("DASHBOARD_SUBSCRIBE streams every subsequent log event live to that connection", async () => {
     socket.send(JSON.stringify({ type: "DASHBOARD_SUBSCRIBE" }));
     expect(await nextMessage(socket)).toEqual({ type: "DASHBOARD_SUBSCRIBED", node_id: "node-test" });
