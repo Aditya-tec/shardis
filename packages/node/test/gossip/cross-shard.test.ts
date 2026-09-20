@@ -67,12 +67,20 @@ function request(socket: WebSocket, body: Record<string, unknown>): Promise<Reco
 
 async function waitUntil<T>(fn: () => Promise<T | null>, description: string): Promise<T> {
   const deadline = Date.now() + 8000;
+  let lastError: unknown;
   while (Date.now() < deadline) {
-    const result = await fn();
-    if (result) return result;
+    try {
+      const result = await fn();
+      if (result) return result;
+    } catch (error) {
+      // During real-process startup and leader promotion, the listener can
+      // briefly be between close() and listen(). ECONNREFUSED is an expected
+      // transient state here, not a reason to abandon the bounded retry.
+      lastError = error;
+    }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`timed out waiting for: ${description}`);
+  throw new Error(`timed out waiting for: ${description}; last error: ${String(lastError ?? "none")}`);
 }
 
 describe("cross-shard leader gossip", () => {
