@@ -1,40 +1,55 @@
 # Shardis
 
-Shardis is a small distributed key-value store built to make distributed
-systems behavior visible: sharding, replication, failover, durability,
-pub/sub, live metrics, and chaos testing run through real WebSocket
-connections and real processes.
+[![CI](https://github.com/Aditya-tec/shardis/actions/workflows/ci.yml/badge.svg)](https://github.com/Aditya-tec/shardis/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/Aditya-tec/shardis/actions/workflows/codeql.yml/badge.svg)](https://github.com/Aditya-tec/shardis/actions/workflows/codeql.yml)
+[![Node.js 20+](https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![pnpm 9](https://img.shields.io/badge/pnpm-9-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
 
-It is intentionally modest in scale. The value is in the implementation and
-the tests, not in pretending to be a production Redis replacement.
+**A distributed, in-memory key-value store built to make distributed-systems behavior tangible.** Shardis implements sharding, leader–follower replication, durable writes, failover, live slot migration, pub/sub, and cluster observability using real processes and WebSocket connections.
+
+It is intentionally a small-scale learning and demonstration system—not a Redis replacement. The goal is readable implementation, honest trade-offs, and reproducible failure testing.
 
 ![Shardis dashboard](docs/media/dashboard-screenshot.png)
 
-## What it does
+## Highlights
 
-- In-memory key-value storage with TTLs and LRU eviction.
-- AOF durability with `fsync` before acknowledgements, snapshots, replay, and
-  crash recovery.
-- Redis CRC16 hash slots across fixed shard ranges, including hash tags.
-- Live slot migration (`reshard`) with `ASK` / `MOVED` redirects.
-- JSON WebSocket protocol by default, plus an opt-in compact binary protocol.
-- `MOVED` redirects for cross-shard requests and follower writes; `ASK`
-  during mid-migration slots.
-- Pub/sub with disconnect cleanup and subscription limits (sharded by
-  default; optional `scope: "cluster"`).
-- Deterministic failover by default, based on the lowest live node id.
-- Cross-shard leader gossip so redirects follow live failover state.
-- Runtime follower membership through `JOIN_URL` and membership relay.
-- Opt-in Raft-lite failover through `FAILOVER_MODE=raft`.
-- CLI, dashboard, Docker Compose topology, metrics, health checks, and
-  structured logs.
+- **Distributed data path** — Redis CRC16 hash slots, hash tags, cross-shard `MOVED` redirects, and `ASK` redirects while slots migrate.
+- **Durability** — append-only logging with `fsync` before acknowledgement, snapshots, compaction, replay, and crash recovery.
+- **Replication and failover** — leader–follower replication, heartbeats, runtime membership, gossip-backed redirect updates, and an opt-in Raft-lite mode.
+- **Real operations** — Docker Compose topology, health checks, JSON metrics, structured logs, CLI tooling, and a Next.js cluster dashboard.
+- **Resilience testing** — unit tests plus real multi-process integration tests, including `SIGKILL` recovery and Compose smoke tests in CI.
 
-Every feature is covered by unit tests and the important failure paths have
-real multi-process integration tests, including SIGKILL recovery.
+## Architecture at a glance
+
+```text
+                         ┌─────────────────────┐
+                         │  Dashboard / CLI    │
+                         │  WebSocket clients  │
+                         └──────────┬──────────┘
+                                    │
+                  MOVED / ASK       │  GET · SET · DEL · PUB/SUB
+                                    ▼
+        ┌───────────────────────────────────────────────────┐
+        │                  Shardis cluster                   │
+        │                                                   │
+        │  Shard A              Shard B              Shard C │
+        │  a1 (leader) ──► a2   b1 (leader) ──► b2   c1 ──► c2│
+        │      │                   │                   │     │
+        │   AOF + snapshot      AOF + snapshot      AOF + snapshot
+        └───────────────────────────────────────────────────┘
+```
+
+The local environment runs three shards and six nodes. Any node can accept a client connection; when a key belongs elsewhere, the client is redirected to the active leader for that shard.
 
 ## Quick start
 
-Requirements: Node.js 20 or newer, pnpm 9, and Docker for the full cluster.
+### Prerequisites
+
+- Node.js 20 or newer
+- pnpm 9
+- Docker Desktop and Docker Compose (for the full cluster)
+
+### Install, build, and test
 
 ```bash
 pnpm install
@@ -42,39 +57,59 @@ pnpm build
 pnpm test
 ```
 
-Start the six-node local cluster:
+### Start the local cluster
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 curl http://localhost:7001/healthz
 ```
 
-Build and use the CLI:
+The six nodes are exposed on ports `7001`–`7006`. Stop the cluster and remove its local volumes with:
+
+```bash
+docker compose down -v
+```
+
+### Use the CLI
 
 ```bash
 pnpm --filter @shardis/cli build
-node packages/cli/dist/shardis-cli.js --url ws://localhost:7001/ws SET foo bar
-node packages/cli/dist/shardis-cli.js --url ws://localhost:7001/ws GET foo
+
+node packages/cli/dist/shardis-cli.js --url ws://localhost:7001/ws SET hello world
+node packages/cli/dist/shardis-cli.js --url ws://localhost:7001/ws GET hello
 ```
 
-The CLI follows `MOVED` redirects automatically. Use `--binary` to send and
-receive the compact binary protocol:
+The CLI follows `MOVED` redirects automatically. To use the compact binary protocol instead of JSON:
 
 ```bash
-node packages/cli/dist/shardis-cli.js --binary --url ws://localhost:7001/ws SET foo bar
+node packages/cli/dist/shardis-cli.js --binary --url ws://localhost:7001/ws SET hello world
 ```
 
-Run the dashboard locally with:
+### Run the dashboard
 
 ```bash
 pnpm --filter @shardis/dashboard dev
 ```
 
-Then open `http://localhost:3000`.
+Open [http://localhost:3000](http://localhost:3000). With the Compose cluster running, the dashboard shows topology, node health, replication state, events, and an in-browser console.
 
-## Failure modes
+## Core capabilities
 
-Kill a deterministic leader and watch its follower take over:
+| Area | Included behavior |
+| --- | --- |
+| Storage | In-memory keys, TTLs, active and lazy expiry, and LRU eviction |
+| Persistence | AOF writes before acknowledgement, snapshots, compaction, and recovery replay |
+| Routing | 16,384 CRC16 hash slots, hash tags, `MOVED` redirects, and runtime slot ownership |
+| Resharding | Slot-by-slot `MIGRATING` / `IMPORTING` handoff with `ASK` redirects and resume support |
+| Replication | Leader streaming, follower acknowledgements, lag visibility, full resync, and membership relay |
+| Failover | Deterministic promotion by default; opt-in Raft-lite elections and majority commit tracking |
+| Messaging | Local sharded pub/sub and optional cluster-scoped publish relay |
+| Protocols | JSON over WebSocket by default, plus an opt-in compact binary protocol |
+| Observability | `/healthz`, `/metrics`, `/topology`, structured logs, CLI, and dashboard |
+
+## Try a failure scenario
+
+Shardis is designed to be observed under failure. Kill the leader of shard A, then inspect its follower:
 
 ```bash
 docker compose kill -s SIGKILL node-a1
@@ -82,135 +117,90 @@ curl http://localhost:7002/healthz
 docker compose up -d node-a1
 ```
 
-The returning node reconnects and performs a full resync. The repository also
-tests follower outages, crash recovery, graceful shutdown, stale cross-shard
-redirects, and dynamic follower joins with actual processes.
+In deterministic mode, the lowest live follower id promotes. The returning node reconnects and completes a full resynchronization. The test suite also covers follower outages, stale redirects, dynamic joins, graceful shutdown, and crash recovery.
 
-## Replication modes
+## Protocol and endpoints
 
-### Deterministic mode
+Client requests are WebSocket messages using commands such as `GET`, `SET`, `DEL`, `EXPIRE`, `TTL`, `SUBSCRIBE`, `UNSUBSCRIBE`, and `PUBLISH`.
 
-This is the default and preserves the original simple operating model. A
-follower that loses its leader waits for the lowest live node id to promote
-itself. It is tested and useful for controlled deployments, but it is not
-consensus: a network partition can still create a split-brain window.
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /healthz` | Node identity, shard, role, and uptime |
+| `GET /metrics` | Operation, eviction, connection, and replication-lag metrics |
+| `GET /topology` | The topology loaded by that node; used for dashboard bootstrap |
+| `WS /ws` | WebSocket client and peer protocol endpoint |
 
-### Raft-lite mode
-
-Set `FAILOVER_MODE=raft` on every node in a shard. The opt-in controller adds:
-
-- randomized election timeouts;
-- terms and one vote per term;
-- log up-to-date checks before granting votes;
-- AppendEntries consistency checks;
-- majority commit tracking; and
-- leader replacement after SIGKILL without losing committed data.
-
-This is deliberately a lite implementation. `currentTerm` and `votedFor` are
-persisted locally with the node's data, but membership changes do not use Raft
-joint consensus. That remaining limitation is explicit rather than an implied
-guarantee.
-
-## Dynamic followers
-
-Shard ranges and initial leaders remain in the cluster config. A new follower
-does not need to be added to the existing nodes' follower lists. Give it the
-leader URL and a reachable node URL:
-
-```bash
-JOIN_URL=ws://127.0.0.1:7001/ws
-NODE_URL=ws://127.0.0.1:7003/ws
-```
-
-The new node sends `MEMBER_JOIN`; the recipient adds it, connects to it, and
-relays `MEMBER_ANNOUNCE` to known members. A graceful shutdown sends
-`MEMBER_LEAVE`. This changes only the follower set, never hash ownership.
-
-## Resharding
-
-Slot ownership starts from the static ranges in `cluster.config.json`, then
-mutates at runtime. Operators move slots with:
-
-```bash
-node packages/cli/dist/shardis-cli.js --url ws://localhost:7001/ws reshard --to shard-b --slots 4096
-```
-
-Each slot goes through a Redis-Cluster-style `MIGRATING` / `IMPORTING` /
-`SLOT_OWNED` handshake. Clients that hit a mid-migration key get an `ASK`
-redirect (followed once by the CLI and dashboard, not cached like `MOVED`).
-Interrupted migrations stay visible via `/admin/slot-state` and resume with
-`--resume` rather than silently sticking forever.
+By default, pub/sub is sharded: publishes reach subscribers connected to the receiving node. Use `scope: "cluster"` (CLI: `PUBLISH channel message --cluster`) to relay an event once to other shards.
 
 ## Configuration
 
-Configuration is supplied through environment variables. `.env.example` lists
-the complete set. The most important values are:
+All node configuration is environment-driven. Copy [`.env.example`](.env.example) when running a node outside Compose.
 
-| Variable | Purpose | Default |
+| Variable | Description | Default |
 | --- | --- | --- |
-| `NODE_ID` | Stable node identity | `node-a1` |
+| `NODE_ID` | Stable node identifier | `node-a1` |
 | `ROLE` | Boot role hint | `leader` |
-| `SHARD_ID` | Shard assignment | `shard-a` |
-| `CLUSTER_CONFIG_PATH` | Shard and node topology | `./cluster.config.local.json` |
-| `PORT` | WebSocket and HTTP port | `7000` |
-| `FAILOVER_MODE` | `deterministic` or `raft` | `deterministic` |
-| `JOIN_URL` | Existing leader for a dynamic follower join | unset |
-| `NODE_URL` | Reachable WebSocket URL for this node | derived from `PORT` |
+| `SHARD_ID` | Node's shard | `shard-a` |
+| `CLUSTER_CONFIG_PATH` | Static topology file | `./cluster.config.local.json` |
+| `PORT` | HTTP and WebSocket port | `7000` |
 | `DATA_DIR` | AOF and snapshot directory | `./data/<NODE_ID>` |
-| `PUBLIC_DEMO` | Enable write-key protection | `false` |
-| `DEMO_WRITE_KEY` | Required key when public demo protection is enabled | unset |
-| `CLUSTER_SECRET` | Shared secret for peer replication/gossip auth | unset |
-| `MAX_CONNECTIONS_PER_IP` | Simultaneous WebSocket cap per source IP | `20` |
+| `FAILOVER_MODE` | `deterministic` or `raft` | `deterministic` |
+| `JOIN_URL` / `NODE_URL` | Dynamic-follower join configuration | unset / derived |
+| `PUBLIC_DEMO` / `DEMO_WRITE_KEY` | Demo write protection | `false` / unset |
+| `CLUSTER_SECRET` | Shared peer authentication secret | unset |
+| `MAX_CONNECTIONS_PER_IP` | Concurrent connection cap per source IP | `20` |
 
-## HTTP endpoints
+## Measured behavior
 
-- `GET /healthz` returns node id, shard, uptime, and current role.
-- `GET /metrics` returns key count, evictions, operation count, connected
-  peers, follower replication lag, per-follower lag / lagging flags, and
-  replication lag on followers.
-- `GET /topology` returns the cluster config this node loaded (used by the
-  dashboard when `NEXT_PUBLIC_BOOTSTRAP_NODE_URL` is set).
-- WebSocket requests use `GET`, `SET`, `DEL`, `EXPIRE`, `TTL`, `SUBSCRIBE`,
-  `UNSUBSCRIBE`, and `PUBLISH`.
+Benchmarks are recorded with a timestamp and commit hash in [docs/benchmarks.md](docs/benchmarks.md). Current local measurements include:
 
-## Pub/sub
+| Scenario | Result |
+| --- | --- |
+| Throughput | 2,260 ops/sec with 10 clients over 5 seconds |
+| Failover recovery | 2,846 ms total with a 3,000 ms heartbeat timeout |
+| Replication lag | 4.5 ms average; 7 ms p95 across 50 samples |
+| Range recompute | ~50% of keys move when changing 3 shards to 4 |
 
-Default `PUBLISH` is **sharded pub/sub**: delivery is local to the node that
-received the publish (and its local subscribers). That matches per-partition
-messaging in real systems and is intentional, not an accident.
+These are local, controlled-environment measurements—not capacity guarantees. Reproduce them with the benchmark package after building the node:
 
-Pass `scope: "cluster"` (CLI: `PUBLISH channel message --cluster`) to relay
-once over gossip to other shards, which then deliver to their own local
-subscribers.
-
-## Transport security
-
-The node speaks plain `ws://` and does not terminate TLS in-process. This is
-intentional: production traffic must pass through a TLS-terminating reverse
-proxy or managed platform endpoint and reach clients as `wss://`. Do not
-publish a node's plain WebSocket port directly to the internet.
-
-Local Compose is open for development. The public demo adds a shared
-`DEMO_WRITE_KEY` for mutating requests; it is a demo safeguard, not per-user
-authentication or tenant isolation. See [SECURITY.md](SECURITY.md) for the
-reporting policy and deployment boundary.
-
-This project is intentionally a small-scale demonstration. Throughput and
-latency numbers in the benchmark history describe the current local topology;
-they are not a capacity promise. There is no off-node backup service, so a
-disk failure can lose local AOF and snapshot data.
-
-## Repository layout
-
-```text
-packages/node/       storage node, protocol, persistence, replication
-packages/cli/        shardis-cli WebSocket client
-packages/dashboard/  Next.js live dashboard
-packages/benchmarks/ benchmark runners and report generation
-docs/                architecture, deployment, and benchmark history
+```bash
+pnpm --filter @shardis/benchmarks bench:<name>
 ```
 
-## Development
+## Security and deployment boundary
+
+Shardis is not intended to be exposed directly to the public internet.
+
+- Nodes speak plain `ws://` internally. Terminate TLS at a reverse proxy or managed platform and expose only `wss://` to clients.
+- `PUBLIC_DEMO=true` can require `DEMO_WRITE_KEY` for mutating operations; this is a demo safeguard, not user authentication or tenant isolation.
+- The node applies request, connection, key-size, and value-size limits. Peer authentication is available through `CLUSTER_SECRET`.
+- Per-key ACLs, encryption at rest, mTLS, off-node backups, and full production hardening are deliberately out of scope.
+
+Please review [SECURITY.md](SECURITY.md) before reporting a vulnerability or deploying an internet-facing instance.
+
+## Design choices and known limits
+
+- **Default failover is not consensus.** Deterministic promotion is useful for controlled environments but can have a split-brain window during a network partition.
+- **Raft-lite is opt-in.** It adds elections, terms, vote and log checks, and majority commit tracking, but membership changes do not use Raft joint consensus.
+- **Persistence is local.** A disk failure can lose that node's AOF and snapshot unless operators copy them elsewhere.
+- **This is deliberately modest in scale.** The project prioritizes visibility and correctness under documented scenarios over throughput tuning or broad production guarantees.
+
+## Repository guide
+
+```text
+packages/
+  node/         Store engine, persistence, protocol, replication, routing
+  cli/          Redirect-aware WebSocket client
+  dashboard/    Next.js cluster dashboard
+  benchmarks/   Throughput, failover, lag, and reshard benchmark runners
+docs/
+  architecture.md  System design and decisions
+  benchmarks.md    Dated benchmark history
+  deployment.md    Render and Vercel deployment guide
+  ci-cd.md         CI/CD and release operations
+```
+
+## Development and CI
 
 ```bash
 pnpm build
@@ -219,6 +209,12 @@ pnpm lint
 pnpm audit --audit-level moderate
 ```
 
-The CI workflow runs dependency installation, audit, builds, all package
-tests, type checks, dashboard build, and the real-process node integration
-tests on every push and pull request.
+GitHub Actions builds and tests every package, audits dependencies, runs the real-process node integration suite, and starts the complete Compose topology for an end-to-end CLI write/read smoke test. Additional workflows run CodeQL, Gitleaks, scheduled chaos checks, benchmarks, and container-image releases.
+
+## Further reading
+
+- [Architecture](docs/architecture.md)
+- [Benchmark history](docs/benchmarks.md)
+- [Deployment guide](docs/deployment.md)
+- [CI/CD operations](docs/ci-cd.md)
+- [Security policy](SECURITY.md)
