@@ -4,7 +4,10 @@ import { useEffect, useState } from "react";
 import type { NodeDescriptor, NodeStatus } from "./types";
 
 const POLL_INTERVAL_MS = 1500;
-const FETCH_TIMEOUT_MS = 1200;
+// Public demos can traverse a managed proxy and may wake from an idle state.
+// Keep the dashboard responsive while allowing a realistic Render round trip;
+// the polling interval prevents a slow node from permanently blocking updates.
+const FETCH_TIMEOUT_MS = 6000;
 
 function unreachable(id: string, shard: string): NodeStatus {
   return {
