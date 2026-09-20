@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { BOOTSTRAP_NODE_URL } from "./clusterConfig";
 import type { NodeDescriptor, NodeStatus } from "./types";
 
 const POLL_INTERVAL_MS = 1500;
@@ -41,6 +42,14 @@ async function fetchJson(url: string): Promise<Record<string, unknown> | null> {
 }
 
 async function pollNode(id: string, shard: string, httpUrl: string): Promise<NodeStatus> {
+  // Hosted demos proxy polling through the dashboard's same-origin API route.
+  // Keep direct browser polling for local Compose, where no public bootstrap
+  // node has been configured.
+  if (BOOTSTRAP_NODE_URL) {
+    const status = await fetchJson(`/api/node-status?nodeId=${encodeURIComponent(id)}`);
+    if (!status || status.reachable !== true) return unreachable(id, shard);
+    return status as unknown as NodeStatus;
+  }
   const [healthz, metrics] = await Promise.all([
     fetchJson(`${httpUrl}/healthz`),
     fetchJson(`${httpUrl}/metrics`)
