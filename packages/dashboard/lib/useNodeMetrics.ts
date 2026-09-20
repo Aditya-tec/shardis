@@ -41,15 +41,7 @@ async function fetchJson(url: string): Promise<Record<string, unknown> | null> {
   }
 }
 
-async function pollNode(id: string, shard: string, httpUrl: string): Promise<NodeStatus> {
-  // Hosted demos proxy polling through the dashboard's same-origin API route.
-  // Keep direct browser polling for local Compose, where no public bootstrap
-  // node has been configured.
-  if (BOOTSTRAP_NODE_URL) {
-    const status = await fetchJson(`/api/node-status?nodeId=${encodeURIComponent(id)}`);
-    if (!status || status.reachable !== true) return unreachable(id, shard);
-    return status as unknown as NodeStatus;
-  }
+async function pollDirectNode(id: string, shard: string, httpUrl: string): Promise<NodeStatus> {
   const [healthz, metrics] = await Promise.all([
     fetchJson(`${httpUrl}/healthz`),
     fetchJson(`${httpUrl}/metrics`)
@@ -71,6 +63,18 @@ async function pollNode(id: string, shard: string, httpUrl: string): Promise<Nod
     replicationLagMs: (metrics?.replication_lag_ms as number | null) ?? null,
     lastUpdated: Date.now()
   };
+}
+
+async function pollNode(id: string, shard: string, httpUrl: string): Promise<NodeStatus> {
+  // Hosted demos prefer same-origin polling via Vercel. If the serverless
+  // request is unavailable, fall back to the node's CORS-enabled endpoints.
+  // Event-feed WebSockets already prove browser-to-node connectivity, so this
+  // preserves observability rather than displaying a false outage.
+  if (BOOTSTRAP_NODE_URL) {
+    const status = await fetchJson(`/api/node-status?nodeId=${encodeURIComponent(id)}`);
+    if (status?.reachable === true) return status as unknown as NodeStatus;
+  }
+  return pollDirectNode(id, shard, httpUrl);
 }
 
 export function useNodeMetrics(nodes: NodeDescriptor[]): Record<string, NodeStatus> {

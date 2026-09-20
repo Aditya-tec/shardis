@@ -45,7 +45,10 @@ export function HashRing({ statuses, shards, loading = false }: { statuses: Reco
     return {
       shard,
       color: COLORS[i % COLORS.length],
-      path: arcPath(cx, cy, r, startAngle, endAngle),
+      // SVG arcs cannot represent a 360° segment when their start and end
+      // positions coincide. The reduced public demo has one shard covering
+      // all slots, so draw that valid topology as a circle explicitly.
+      path: fraction >= 1 ? null : arcPath(cx, cy, r, startAngle, endAngle),
       leaderId,
       anyReachable,
       labelX: cx + labelR * Math.cos(midAngle),
@@ -57,14 +60,11 @@ export function HashRing({ statuses, shards, loading = false }: { statuses: Reco
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         {segments.map((seg) => (
-          <path
-            key={seg.shard.id}
-            d={seg.path}
-            fill={seg.color}
-            opacity={seg.anyReachable ? 0.9 : 0.25}
-            stroke="var(--panel)"
-            strokeWidth={2}
-          />
+          seg.path ? (
+            <path key={seg.shard.id} d={seg.path} fill={seg.color} opacity={seg.anyReachable ? 0.9 : 0.25} stroke="var(--panel)" strokeWidth={2} />
+          ) : (
+            <circle key={seg.shard.id} cx={cx} cy={cy} r={r} fill={seg.color} opacity={seg.anyReachable ? 0.9 : 0.25} stroke="var(--panel)" strokeWidth={2} />
+          )
         ))}
         {segments.map((seg) => (
           <text
