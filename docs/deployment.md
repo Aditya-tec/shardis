@@ -112,12 +112,12 @@ data directory and should be copied manually before important demonstrations.
 
 ## Status of this deployment
 
-As of this repo's current state, `render.yaml` and
-`cluster.config.render.json` are written and locally validated (the
-node boots correctly under the exact env vars Render will set, and
-write-protection/CORS behave as expected — see the Step 16 commit for
-the validation done without a live Render account). The actual Render
-and Vercel deployments require signing into those platforms
-interactively, which wasn't done as part of writing this repo. Follow
-the steps above to actually put it live, then update the README's
-"Live demo" section with the real URL.
+Live:
+
+- Dashboard: https://shardis-benchmarks.vercel.app/
+- Leader: https://shardis-leader.onrender.com/healthz
+- Follower: https://shardis-follower.onrender.com/healthz
+
+`render.yaml` and `cluster.config.render.json` define the reduced
+two-node public demo. Free Render services sleep after idle traffic;
+see the README Live demo section for the cold-start caveat.

@@ -11,6 +11,13 @@ It is intentionally a small-scale learning and demonstration system—not a Redi
 
 ![Shardis dashboard](docs/media/dashboard-screenshot.png)
 
+## Live demo
+
+- **Dashboard:** [shardis-benchmarks.vercel.app](https://shardis-benchmarks.vercel.app/)
+- **Nodes:** [leader `/healthz`](https://shardis-leader.onrender.com/healthz) · [follower `/healthz`](https://shardis-follower.onrender.com/healthz)
+
+Free Render services sleep after idle traffic and can take about a minute to wake. The dashboard retries automatically and shows a waking state during that interval.
+
 ## Highlights
 
 - **Distributed data path** — Redis CRC16 hash slots, hash tags, cross-shard `MOVED` redirects, and `ASK` redirects while slots migrate.
